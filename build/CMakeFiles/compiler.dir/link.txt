@@ -1,0 +1,1 @@
+/usr/bin/clang++     CMakeFiles/compiler.dir/src/main.cpp.o CMakeFiles/compiler.dir/flex.lex.cpp.o CMakeFiles/compiler.dir/bison.tab.cpp.o  -o compiler   -L/opt/lib/native  -Wl,-rpath,/opt/lib/native -lkoopa -lpthread -ldl 
