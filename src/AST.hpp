@@ -5,8 +5,8 @@
 
 using namespace std;
 
-#define KOOPA_MODE 1
-#define RISCV_MODE 2
+#define KOOPA_MODE 0
+#define RISCV_MODE 1
 
 class BaseAST
 {

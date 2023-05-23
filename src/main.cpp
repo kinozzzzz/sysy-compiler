@@ -1,6 +1,6 @@
 #include "AST.hpp"
 #include <memory>
-#include <string>
+#include <string.h>
 #include <stdio.h>
 
 extern FILE *yyin;
@@ -9,22 +9,32 @@ extern void yyerror(std::unique_ptr<CompUnit> &comp,const char*);
 
 int main(int argc,char* argv[])
 {
-    if(argc%2 != 1)
-    {
-        cout<<"unmatched parameters\n";
-        return 0;
-    }
+    char *in_file = (char*)"../source.cpp";
+    char *out_file = (char*)"../output.txt";
+    int omode = KOOPA_MODE;
     for(int i=1;i < argc;i++)
     {
-        if(string(argv[i]) == string("-koopa"))
+        printf("%d %s\n",i,argv[i]);
+        if(!memcmp(argv[i],"-koopa",6))
         {
-            freopen(argv[++i], "r", stdin); 
+            omode = KOOPA_MODE;
         }
-        if(string(argv[i]) == string("-o"))
+        else if(!memcmp(argv[i],"-riscv",6))
         {
-            freopen(argv[++i], "w", stdout); 
+            omode = RISCV_MODE;
+        }
+        else if(!memcmp(argv[i],"-o",2))
+        {
+            out_file = argv[++i];
+        }
+        else
+        {
+            in_file = argv[i];
         }
     }
+    freopen(in_file,"r",stdin);
+    freopen(out_file,"w",stdout);
+
     auto answer = std::make_unique<CompUnit>();
     yyparse(answer);
     answer->print();
