@@ -7,11 +7,21 @@ extern FILE *yyin;
 extern int yyparse(std::unique_ptr<CompUnit> &comp);
 extern void yyerror(std::unique_ptr<CompUnit> &comp,const char*);
 
+int temp_var_range=0;
+int genTempVar()
+{
+    // 生成临时变量的下标
+    return temp_var_range++;
+}
+
+
+
 int main(int argc,char* argv[])
 {
     char *in_file = (char*)"../source.cpp";
     char *out_file = (char*)"../output.txt";
     int omode = KOOPA_MODE;
+    
     for(int i=1;i < argc;i++)
     {
         printf("%d %s\n",i,argv[i]);
@@ -34,8 +44,8 @@ int main(int argc,char* argv[])
     }
     freopen(in_file,"r",stdin);
     freopen(out_file,"w",stdout);
-
     auto answer = std::make_unique<CompUnit>();
     yyparse(answer);
-    answer->print();
+    if(omode == KOOPA_MODE)
+        answer->print_koopa();
 }

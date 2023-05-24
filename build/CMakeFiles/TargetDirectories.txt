@@ -1,3 +1,0 @@
-/root/compiler/build/CMakeFiles/rebuild_cache.dir
-/root/compiler/build/CMakeFiles/edit_cache.dir
-/root/compiler/build/CMakeFiles/compiler.dir
