@@ -18,19 +18,27 @@ extern void yyerror(std::unique_ptr<CompUnit> &comp, const char *s);
 
 
 %union{
-    std::string* str_val;
+    string *str_val;
     int int_val;
     BaseAST* ast_val;
+    DeclareDef *def_val;
+    BlockItems *items_val;
+    Decls *decl_val;
 }
 
 
 %parse-param {std::unique_ptr<CompUnit> &comp}
-%token T_Int T_Ret T_Logic_And T_Logic_Or
-%token <str_val> T_ID
-%token <int_val> T_Int_Const 
+%token T_Int T_Ret T_Logic_And T_Logic_Or T_Const
+%token <str_val> T_Ident
+%token <int_val> T_Int_Const
 
 %type <ast_val> FuncDef FuncType Block Stmt Number Expr AtomExpr AndExpr AddSubExpr MulDivExpr EqualExpr CompareExpr UnaryExpr
-%type <int_val> UnaryOp AddSubOp MulDivOp CompareOp EqualOp
+%type <ast_val> BlockItem
+%type <int_val> UnaryOp AddSubOp MulDivOp CompareOp EqualOp 
+%type <int_val> VarType
+%type <def_val> ConstDef VarDef
+%type <items_val> BlockItems
+%type <decl_val> VarDecl Decl ConstDecl
 
 %%
 CompUnit
@@ -43,12 +51,13 @@ CompUnit
     };
 
 FuncDef
-    :   FuncType T_ID '(' ')' Block
+    :   FuncType T_Ident '(' ')' Block
     {
         //printf("FuncDef\n");
         FuncDef* ast = new FuncDef();
         ast->func_type = $1;
-        ast->id = $2;
+        ast->id = *($2);
+        delete $2;
         ast->block = $5;
         $$ = (BaseAST*)ast;
     };
@@ -62,23 +71,172 @@ FuncType
         //printf("FuncType\n");
     };
 
+VarType
+    :   T_Int
+    {
+        $$ = TypeInt;
+    }
+
 Block
-    :   '{' Stmt '}'
+    :   '{' BlockItems '}'
     {
         Block* ast = new Block();
-        ast->stmt = $2;
+        ast->stmts = $2->vec;
+        delete $2;
         $$ = (BaseAST*)ast;
         //printf("block\n");
     };
 
+BlockItems
+    :   BlockItems BlockItem
+    {
+        if($2 != NULL)
+        {
+            if($2->ifDecls())
+            {
+                Decls *decl = (Decls*)$2;
+                for(int i=0;i < decl->defs.size();i++)
+                {
+                    ($1->vec).insert(($1->vec).end(),(BaseAST*)decl->defs[i]);
+                }
+            }
+            else
+                ($1->vec).insert(($1->vec).end(),$2);
+        }
+        $$ = $1;
+    }
+    |
+    {
+        BlockItems *bt = new BlockItems();
+        $$ = bt;
+    }
+
+BlockItem
+    :   Decl
+    {
+        $$ = (BaseAST*)$1;
+    }
+    |   Stmt
+    {
+        $$ = $1;
+    }
+
+Decl
+    :   ConstDecl ';'
+    {
+        $$ = $1;
+    }
+    |   VarDecl ';'
+    {
+        $$ = $1;
+    }
+
+ConstDecl
+    :   T_Const VarType ConstDef
+    {
+        Decls *decl = new Decls($2);
+        $3->type = $2;
+        $3->declType = ConstDecl;
+        decl->defs.insert((decl->defs).end(),$3);
+        $$ = decl;
+
+        #ifdef DEBUG1
+        cout<<"T_Const VarType ConstDef -> ConstDecl"<<endl;
+        cout<<$3->id<<symbol_table.size()<<symbol_table[$3->id]->value<<endl;
+        #endif
+    }
+    |   ConstDecl ',' ConstDef
+    {
+        $3->type = $1->type;
+        $3->declType = ConstDecl;
+        ($1->defs).insert(($1->defs).end(),$3);
+        $$ = $1;
+
+        #ifdef DEBUG1
+        cout<<"ConstDecl , ConstDef -> ConstDecl"<<endl;
+        cout<<$3->id<<symbol_table.size()<<symbol_table[$3->id]->value<<endl;
+        #endif
+    }
+
+VarDecl
+    :   VarType VarDef
+    {
+        #ifdef DEBUG1
+        cout<<"VarType VarDef -> VarDecl"<<endl;
+        #endif
+
+        Decls *decl = new Decls($1);
+        $2->type = $1;
+        $2->declType = VarDecl;
+        decl->defs.insert((decl->defs).end(),$2);
+        $$ = decl;
+    }
+    |   VarDecl ',' VarDef
+    {
+        #ifdef DEBUG1
+        cout<<"VarDecl , VarDef -> VarDecl"<<endl;
+        #endif
+
+        $3->type = $1->type;
+        $3->declType = VarDecl;
+        ($1->defs).insert(($1->defs).end(),$3);
+        $$ = $1;
+    }
+
+VarDef
+    :   T_Ident
+    {
+        #ifdef DEBUG1
+        cout<<"T_Ident -> VarDef"<<endl;
+        #endif
+
+        DeclareDef *def = new DeclareDef(*($1));
+        delete $1;
+        $$ = def;
+    }
+    |   T_Ident '=' Expr
+    {
+        #ifdef DEBUG1
+        cout<<"T_Ident = Expr -> VarDef"<<endl;
+        #endif
+
+        DeclareDef *def = new DeclareDef(*($1),$3);
+        delete $1;
+        $$ = def;
+    }
+
+ConstDef
+    :   T_Ident '=' Expr
+    {
+        #ifdef DEBUG1
+        cout<<"T_Ident = Expr -> ConstDef"<<endl;
+        #endif
+
+        DeclareDef *def = new DeclareDef(*($1),$3);
+        delete $1;
+        $$ = def;
+    }
+
 Stmt
     :   T_Ret Expr ';'
     {
-        Stmt* ast = new Stmt();
-        ast->expr = $2;
+        #ifdef DEBUG1
+        cout<<"T_Ret Expr; -> Stmt"<<endl;
+        #endif
+
+        Stmt* ast = new Stmt($2,Return);
         $$ = (BaseAST*)ast;
         //printf("stmt\n");
-    };
+    }
+    |   T_Ident '=' Expr ';'
+    {
+        #ifdef DEBUG1
+        cout<<"T_Ident = Expr; -> Stmt"<<endl;
+        #endif
+        Stmt *ast = new Stmt($3,Assign,new Var(*($1)));
+        delete $1;
+        $$ = (BaseAST*)ast;
+    }
 
 Expr
     :   AndExpr
@@ -189,7 +347,12 @@ AtomExpr
     |   Number
     {
         //cout<<"Number -> AtomExpr"<<endl;
-        Expr* ast = new Expr($1);
+        $$ = $1;
+    }
+    |   T_Ident
+    {
+        Var *ast = new Var(*($1));
+        delete $1;
         $$ = (BaseAST*)ast;
     }
     

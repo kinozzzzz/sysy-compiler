@@ -3,38 +3,81 @@
 #include<memory>
 #include<iostream>
 #include<vector>
+#include<map>
 
 using namespace std;
+
+//#define DEBUG 0     //总体流程debug
+//#define DEBUG1 0    // bison文件debug
+//#define DEBUG2 0    // koopa输出debug
 
 #define KOOPA_MODE 0
 #define RISCV_MODE 1
 
-// 关于操作的宏定义
+// 指令级操作
 #define NoOperation 0
 #define Invert 1
 #define EqualZero 2
-#define Return 3
-#define Add 4
-#define Sub 5
-#define Mul 6
-#define Div 7
-#define Mod 8
-#define Less 9
-#define Greater 10
-#define LessEq 11
-#define GreaterEq 12
-#define Equal 13
-#define NotEqual 14
-#define And 15
-#define Or 16
-#define NotEqualZero 17
+#define Add 3
+#define Sub 4
+#define Mul 5
+#define Div 6
+#define Mod 7
+#define Less 8
+#define Greater 9
+#define LessEq 10
+#define GreaterEq 11
+#define Equal 12
+#define NotEqual 13
+#define And 14
+#define Or 15
+#define NotEqualZero 16
+
+// 声明类型
+#define VarDecl 0
+#define ConstDecl 1
+
+// 变量类型
+#define TypeInt 0
+
+// 语句类型
+#define Assign 0
+#define Return 1
 
 class BaseAST;
 class Expr;
+class Symbol;
 
-#define Expr2(x) *(Expr*)(x)
+static int temp_var_range=0;
+static map<string,Symbol*> symbol_table;
+static int genTempVar()
+{
+    // 生成临时变量的下标
+    return temp_var_range++;
+}
 
-int genTempVar();
+class Symbol
+{
+    public:
+        int declType;
+        int type;
+        int value;
+        int temp_var=-1;
+        int ifAlloc = 0;
+
+        Symbol(int dtp,int tp = TypeInt,int v=0)
+        {
+            type = tp;
+            declType = dtp;
+            value = v;
+        }
+};
+
+class BlockItems
+{
+    public:
+        vector<BaseAST*> vec;
+};
 
 class BaseAST
 {
@@ -45,17 +88,45 @@ class BaseAST
         virtual void genInstr(int instrType){};
         virtual void output(){};
         virtual int ifBoolean(){return 0;}
+        virtual int ifDecls(){return 0;}
+        virtual int eval(){return 0;}
+        virtual int ifStmt(){return 0;}
+        virtual int ifExpr(){return 0;}
+        virtual int ifVar(){return 0;}
 };
 
-class ID : public BaseAST
+class Var : public BaseAST    // 为了string变量的传输
 {
     public:
-        std::string id_name;
+        string id_name;
 
+        Var(string a)
+        {
+            id_name = a;
+        }
         virtual void print_koopa()
         {
-            std::cout<<id_name;
+            Symbol *symbol = symbol_table[id_name];
+            //cout<<symbol->temp_var<<symbol->declType<<endl;
+            if(symbol->temp_var == -1 && symbol->declType != ConstDecl)
+            {
+                int temp_var = genTempVar();
+                cout<<"  %"<<temp_var<<" = load @"<<id_name<<endl;
+                symbol_table[id_name]->temp_var = temp_var;
+            }
         }
+        virtual void output()
+        {
+            if(symbol_table[id_name]->temp_var == -1)
+                cout<<symbol_table[id_name]->value;
+            else
+                cout<<"%"<<symbol_table[id_name]->temp_var;
+        }
+        virtual int eval()
+        {
+            return symbol_table[id_name]->value;
+        }
+        virtual int ifVar(){return 1;}
 };
 
 class Number : public BaseAST
@@ -63,12 +134,77 @@ class Number : public BaseAST
     public:
         int num;
 
-        virtual void print_koopa(){};
+        virtual void print_koopa()
+        {
+
+        };
         virtual void output()
         {
             cout<<num;
         }
         virtual int ifNumber(){return 1;}
+        virtual int eval()
+        {
+            return num;
+        }
+};
+
+class DeclareDef : BaseAST
+{
+    public:
+        BaseAST *expr;
+        string id;
+        int declType;
+        int type;
+
+        DeclareDef(string varId,BaseAST *e=NULL)
+        {
+            id = varId;
+            expr = e;
+        }
+        virtual void print_koopa()
+        {
+            #ifdef DEBUG2
+            cout<<"koopa: DeclareDef"<<endl;
+            cout<<"     "<<declType<<endl;
+            #endif
+            Symbol *symbol;
+            if(declType == VarDecl)
+            {
+                symbol = new Symbol(VarDecl,type);
+                // 如果这个变量还没有分配过内存，那么就分配内存
+                if(!(symbol_table.count(id) && symbol_table[id]->ifAlloc))
+                {
+                    cout<<"  @"<<id<<" = alloc ";
+                    if(type == TypeInt)
+                        cout<<"i32";
+                    cout<<endl;
+                    symbol->ifAlloc = 1;
+                }
+                if(expr != NULL)
+                {
+                    int value = expr->eval();
+                    cout<<"  store "<<value<<", @"<<id<<endl;
+                    symbol->value = value;
+                }
+            }
+            else if(declType == ConstDecl)
+            {
+                int value = expr->eval();
+                symbol = new Symbol(ConstDecl,type,value);
+            }
+
+            if(symbol_table.count(id))
+            {
+                symbol->ifAlloc = symbol_table[id]->ifAlloc;
+                symbol_table[id] = symbol;
+            }
+            else
+            {
+                symbol_table.emplace(id,symbol);
+            }
+            
+        }
 };
 
 class Expr : public BaseAST
@@ -104,6 +240,8 @@ class Expr : public BaseAST
             right_expr->output();
         }
 
+        virtual int ifExpr(){return 1;}
+
         virtual void genInstr(int instrType)
         {
             if(instrType == NoOperation)
@@ -121,10 +259,6 @@ class Expr : public BaseAST
             {
                 cout<<"sub 0, ";
                 right_expr->output();
-            }
-            else if(instrType == Return)
-            {
-                cout<<"wrong ret";
             }
             else if(instrType == NotEqualZero)
             {
@@ -194,14 +328,7 @@ class Expr : public BaseAST
 
         virtual void output()
         {
-            if(right_expr->ifNumber())
-            {
-                right_expr->output();
-            }
-            else
-            {
-                cout<<"%"<<var;
-            }
+            cout<<"%"<<var;
         }
 
         virtual int ifBoolean()
@@ -212,39 +339,131 @@ class Expr : public BaseAST
             }
             return 0;
         }
+
+        virtual int eval()
+        {
+            if(operation >= Add && operation <= Or)
+            {
+                int temp1 = left_expr->eval();
+                int temp2 = right_expr->eval();
+                if(operation == Add)
+                    return temp1 + temp2;
+                else if(operation == Sub)
+                    return temp1 - temp2;
+                else if(operation == Mul)
+                    return temp1 * temp2;
+                else if(operation == Div)
+                    return temp1 / temp2;
+                else if(operation == Mod)
+                    return temp1 % temp2;
+                else if(operation == Less)
+                    return temp1 < temp2;
+                else if(operation == Greater)
+                    return temp1 > temp2;
+                else if(operation == LessEq)
+                    return temp1 <= temp2;
+                else if(operation == GreaterEq)
+                    return temp1 >= temp2;
+                else if(operation == Equal)
+                    return temp1 == temp2;
+                else if(operation == NotEqual)
+                    return temp1 != temp2;
+                else if(operation == And)
+                    return temp1 & temp2;
+                else if(operation == Or)
+                    return temp1 | temp2;
+            }
+            int temp = right_expr->eval();
+            if(operation == NoOperation)
+                return temp;
+            else if(operation == Invert)
+                return -temp;
+            else if(operation == EqualZero)
+                return temp == 0;
+            else if(operation == NotEqualZero)
+                return temp != 0;
+            return 0;
+        }
 };
 
 class Stmt : public BaseAST
 {
     public:
         BaseAST* expr;
+        Var *var;
+        int stmt_type;
+
+        Stmt(BaseAST *e,int type,Var *name = NULL)
+        {
+            expr = e;
+            var = name;
+            stmt_type = type;
+        }
 
         virtual void print_koopa()
         {
             expr->print_koopa();
-            genInstr(Return);
+            genInstr();
         }
 
-        virtual void genInstr(int instrType)
+        virtual void genInstr(int instrType = NoOperation)
         {
-            if(instrType == Return)
+            cout<<"  ";
+            if(stmt_type == Return)
             {
-                cout<<"  ret ";
+                cout<<"ret ";
                 expr->output();
+            }
+            else if(stmt_type == Assign)
+            {
+                symbol_table[var->id_name]->value = expr->eval();
+                if(expr->ifExpr())
+                    symbol_table[var->id_name]->temp_var = ((Expr*)expr)->var;
+                else if(expr->ifVar())
+                {
+                    string id = ((Var*)expr)->id_name;
+                    symbol_table[var->id_name]->temp_var = symbol_table[id]->temp_var;
+                }
+                cout<<"store ";
+                expr->output();
+                cout<<", @"<<var->id_name;
             }
             cout<<endl;
         }
+
+        virtual int ifStmt(){return 1;}
+};
+
+class Decls : public BaseAST
+{
+    public:
+        vector<DeclareDef*> defs;
+        int type;
+        Decls(int t)
+        {
+            type = t;
+        }
+        virtual int ifDecls(){return 1;}
+        virtual void print_koopa(){}
 };
 
 class Block : public BaseAST
 {
     public:
-        BaseAST* stmt;
+        vector<BaseAST*> stmts;
 
         virtual void print_koopa()
         {
             cout<<"{\n%"<<"entry:\n";
-            stmt->print_koopa();
+            #ifdef DEBUG2
+            //cout<<"size of stmts:"<<stmts.size()<<endl;
+            #endif
+            for(int i=0;i < stmts.size();i++)
+            {
+                stmts[i]->print_koopa();
+                if(stmts[i]->ifStmt() && ((Stmt*)stmts[i])->stmt_type == Return)
+                    break;
+            }
             cout<<"}";
         }
 };
@@ -264,13 +483,13 @@ class FuncDef : public BaseAST
 {
     public:
         BaseAST* func_type;
-        std::string* id;
+        string id;
         BaseAST* block;
 
         virtual void print_koopa()
         {
-            std::cout<<"fun @";
-            std::cout<<*id<<"(): ";
+            cout<<"fun @";
+            cout<<id<<"(): ";
             func_type->print_koopa();
             block->print_koopa();
         }
