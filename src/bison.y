@@ -237,6 +237,29 @@ Stmt
         delete $1;
         $$ = (BaseAST*)ast;
     }
+    |   Block
+    {
+        #ifdef DEBUG1
+        cout<<"Block -> Stmt"<<endl;
+        #endif
+        Stmt *ast = new Stmt($1,Other);
+        $$ = (BaseAST*)ast;
+    }
+    |   Expr ';'
+    {
+        #ifdef DEBUG1
+        cout<<"Expr; -> Stmt"<<endl;
+        #endif
+        Stmt *ast = new Stmt($1,Other);
+        $$ = (BaseAST*)ast;
+    }
+    |   ';'
+    {
+        #ifdef DEBUG1
+        cout<<"Stmt; -> Stmt"<<endl;
+        #endif
+        $$ = NULL;
+    }
 
 Expr
     :   AndExpr

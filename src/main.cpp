@@ -44,8 +44,4 @@ int main(int argc,char* argv[])
     #endif
     if(omode == KOOPA_MODE)
         answer->print_koopa();
-
-    for (auto i = symbol_table.begin(); i != symbol_table.end(); ++i) {
-        cout << i->second->value << endl;
-        }
 }

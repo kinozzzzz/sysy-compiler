@@ -43,19 +43,10 @@ using namespace std;
 // 语句类型
 #define Assign 0
 #define Return 1
+#define Other 2
 
 class BaseAST;
 class Expr;
-class Symbol;
-
-static int temp_var_range=0;
-static map<string,Symbol*> symbol_table;
-static int genTempVar()
-{
-    // 生成临时变量的下标
-    return temp_var_range++;
-}
-
 class Symbol
 {
     public:
@@ -64,14 +55,58 @@ class Symbol
         int value;
         int temp_var=-1;
         int ifAlloc = 0;
+        string name;
 
-        Symbol(int dtp,int tp = TypeInt,int v=0)
+        Symbol(int dtp,string n,int tp = TypeInt,int v=0)
         {
             type = tp;
             declType = dtp;
             value = v;
+            name = n;
         }
 };
+
+typedef map<string,Symbol*> SymbolMap;
+
+static int temp_var_range=0;
+static int block_range=0;
+static int now_block_id;
+static vector<SymbolMap> symbol_table;
+static int ifReturn = 0;    //暂时处理无跳转情况的重复跳转语句
+static int genTempVar()
+{
+    // 生成临时变量的下标
+    return temp_var_range++;
+}
+static int genBlockId()
+{
+    return block_range++;
+}
+
+static void Error()
+{
+    cout<<"error";
+    exit(0);
+}
+
+static void delSymbolMap(SymbolMap &map)
+{
+    for(auto iter = map.begin();iter != map.end();iter++)
+    {
+        delete iter->second;
+    }
+}
+
+static Symbol* findSymbol(string &id)
+{
+    for(int i=symbol_table.size()-1;i >= 0;i--)
+    {
+        if(symbol_table[i].count(id))
+            return symbol_table[i][id];
+    }
+    Error();
+    return NULL;
+}
 
 class BlockItems
 {
@@ -104,27 +139,32 @@ class Var : public BaseAST    // 为了string变量的传输
         {
             id_name = a;
         }
+
         virtual void print_koopa()
         {
-            Symbol *symbol = symbol_table[id_name];
+            // 变量的print_koopa函数对应将变量移入临时变量(寄存器)的过程
+            Symbol *symbol = findSymbol(id_name);
             //cout<<symbol->temp_var<<symbol->declType<<endl;
             if(symbol->temp_var == -1 && symbol->declType != ConstDecl)
             {
                 int temp_var = genTempVar();
-                cout<<"  %"<<temp_var<<" = load @"<<id_name<<endl;
-                symbol_table[id_name]->temp_var = temp_var;
+                cout<<"  %"<<temp_var<<" = load "<<symbol->name<<endl;
+                symbol->temp_var = temp_var;
             }
         }
+
         virtual void output()
         {
-            if(symbol_table[id_name]->temp_var == -1)
-                cout<<symbol_table[id_name]->value;
+            Symbol *symbol = findSymbol(id_name);
+            if(symbol->temp_var == -1)
+                cout<<symbol->value;
             else
-                cout<<"%"<<symbol_table[id_name]->temp_var;
+                cout<<"%"<<symbol->temp_var;
         }
+
         virtual int eval()
         {
-            return symbol_table[id_name]->value;
+            return findSymbol(id_name)->value;
         }
         virtual int ifVar(){return 1;}
 };
@@ -169,13 +209,15 @@ class DeclareDef : BaseAST
             cout<<"     "<<declType<<endl;
             #endif
             Symbol *symbol;
+            int depth = symbol_table.size() - 1;
+            string name = string("@_") + to_string(now_block_id) + id;
             if(declType == VarDecl)
             {
-                symbol = new Symbol(VarDecl,type);
+                symbol = new Symbol(VarDecl,name,type);
                 // 如果这个变量还没有分配过内存，那么就分配内存
-                if(!(symbol_table.count(id) && symbol_table[id]->ifAlloc))
+                if(!(symbol_table[depth].count(id) && symbol_table[depth][id]->ifAlloc))
                 {
-                    cout<<"  @"<<id<<" = alloc ";
+                    cout<<"  "<<name<<" = alloc ";
                     if(type == TypeInt)
                         cout<<"i32";
                     cout<<endl;
@@ -184,24 +226,24 @@ class DeclareDef : BaseAST
                 if(expr != NULL)
                 {
                     int value = expr->eval();
-                    cout<<"  store "<<value<<", @"<<id<<endl;
+                    cout<<"  store "<<value<<", "<<name<<endl;
                     symbol->value = value;
                 }
             }
             else if(declType == ConstDecl)
             {
                 int value = expr->eval();
-                symbol = new Symbol(ConstDecl,type,value);
+                symbol = new Symbol(ConstDecl,name,type,value);
             }
 
-            if(symbol_table.count(id))
+            if(symbol_table[depth].count(id))
             {
-                symbol->ifAlloc = symbol_table[id]->ifAlloc;
-                symbol_table[id] = symbol;
+                symbol->ifAlloc = symbol_table[depth][id]->ifAlloc;
+                symbol_table[depth][id] = symbol;
             }
             else
             {
-                symbol_table.emplace(id,symbol);
+                symbol_table[depth].emplace(id,symbol);
             }
             
         }
@@ -408,25 +450,30 @@ class Stmt : public BaseAST
 
         virtual void genInstr(int instrType = NoOperation)
         {
-            cout<<"  ";
+            if(stmt_type == Other)
+                return;
+            
             if(stmt_type == Return)
             {
-                cout<<"ret ";
+                ifReturn = 1;
+                cout<<"  ret ";
                 expr->output();
             }
             else if(stmt_type == Assign)
             {
-                symbol_table[var->id_name]->value = expr->eval();
+                cout<<"  ";
+                Symbol* symbol = findSymbol(var->id_name);
+                symbol->value = expr->eval();
                 if(expr->ifExpr())
-                    symbol_table[var->id_name]->temp_var = ((Expr*)expr)->var;
+                    symbol->temp_var = ((Expr*)expr)->var;
                 else if(expr->ifVar())
                 {
                     string id = ((Var*)expr)->id_name;
-                    symbol_table[var->id_name]->temp_var = symbol_table[id]->temp_var;
+                    symbol->temp_var = findSymbol(id)->temp_var;
                 }
                 cout<<"store ";
                 expr->output();
-                cout<<", @"<<var->id_name;
+                cout<<", "<<symbol->name;
             }
             cout<<endl;
         }
@@ -454,17 +501,25 @@ class Block : public BaseAST
 
         virtual void print_koopa()
         {
-            cout<<"{\n%"<<"entry:\n";
             #ifdef DEBUG2
             //cout<<"size of stmts:"<<stmts.size()<<endl;
             #endif
+            SymbolMap new_map;
+            symbol_table.push_back(new_map);
+            int block_id = genBlockId();
             for(int i=0;i < stmts.size();i++)
             {
+                now_block_id = block_id;
+                if(ifReturn)
+                    break;
                 stmts[i]->print_koopa();
                 if(stmts[i]->ifStmt() && ((Stmt*)stmts[i])->stmt_type == Return)
+                {
                     break;
+                }
             }
-            cout<<"}";
+            delSymbolMap(*(symbol_table.rbegin()));
+            symbol_table.pop_back();
         }
 };
 
@@ -491,7 +546,9 @@ class FuncDef : public BaseAST
             cout<<"fun @";
             cout<<id<<"(): ";
             func_type->print_koopa();
+            cout<<"{\n%"<<"entry:\n";
             block->print_koopa();
+            cout<<"}";
         }
 };
 
