@@ -28,12 +28,12 @@ extern void yyerror(std::unique_ptr<CompUnit> &comp, const char *s);
 
 
 %parse-param {std::unique_ptr<CompUnit> &comp}
-%token T_Int T_Ret T_Logic_And T_Logic_Or T_Const
+%token T_Int T_Ret T_Logic_And T_Logic_Or T_Const T_If T_Else
 %token <str_val> T_Ident
 %token <int_val> T_Int_Const
 
 %type <ast_val> FuncDef FuncType Block Stmt Number Expr AtomExpr AndExpr AddSubExpr MulDivExpr EqualExpr CompareExpr UnaryExpr
-%type <ast_val> BlockItem
+%type <ast_val> BlockItem MS UMS IfExpr
 %type <int_val> UnaryOp AddSubOp MulDivOp CompareOp EqualOp 
 %type <int_val> VarType
 %type <def_val> ConstDef VarDef
@@ -90,6 +90,7 @@ Block
 BlockItems
     :   BlockItems BlockItem
     {
+        //BaseAST *ast = $1->vec[($1->vec).size()-1];
         if($2 != NULL)
         {
             if($2->ifDecls())
@@ -218,6 +219,16 @@ ConstDef
     }
 
 Stmt
+    :   MS
+    {
+        $$ = $1;
+    }
+    |   UMS
+    {
+        $$ = $1;
+    }
+
+MS
     :   T_Ret Expr ';'
     {
         #ifdef DEBUG1
@@ -242,8 +253,7 @@ Stmt
         #ifdef DEBUG1
         cout<<"Block -> Stmt"<<endl;
         #endif
-        Stmt *ast = new Stmt($1,Other);
-        $$ = (BaseAST*)ast;
+        $$ = $1;
     }
     |   Expr ';'
     {
@@ -259,6 +269,29 @@ Stmt
         cout<<"Stmt; -> Stmt"<<endl;
         #endif
         $$ = NULL;
+    }
+    |   IfExpr MS T_Else MS
+    {
+        JumpStmt *ast = new JumpStmt($1,$2,$4);
+        $$ = (BaseAST*)ast;
+    }
+
+UMS
+    :   IfExpr Stmt
+    {
+        JumpStmt *ast = new JumpStmt($1,$2);
+        $$ = (BaseAST*)ast;
+    }
+    |   IfExpr MS T_Else UMS
+    {
+        JumpStmt *ast = new JumpStmt($1,$2,$4);
+        $$ = (BaseAST*)ast;
+    }
+
+IfExpr
+    :   T_If '(' Expr ')'
+    {
+        $$ = $3;
     }
 
 Expr
