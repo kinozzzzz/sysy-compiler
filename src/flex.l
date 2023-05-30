@@ -30,6 +30,9 @@ CommentLines    \/\*(?:[^\*]|\*+[^\/\*])*\*+\/
 "const"         {return T_Const;}
 "if"            {return T_If;}
 "else"          {return T_Else;}
+"while"         {return T_While;}
+"break"         {return T_Break;}
+"continue"      {return T_Continue;}
 
 {Identifier}    {yylval.str_val = new string(yytext);return T_Ident;}
 {Decimal}       {yylval.int_val = strtol(yytext,nullptr,0);return T_Int_Const;}

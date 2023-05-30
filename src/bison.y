@@ -28,7 +28,7 @@ extern void yyerror(std::unique_ptr<CompUnit> &comp, const char *s);
 
 
 %parse-param {std::unique_ptr<CompUnit> &comp}
-%token T_Int T_Ret T_Logic_And T_Logic_Or T_Const T_If T_Else
+%token T_Int T_Ret T_Logic_And T_Logic_Or T_Const T_If T_Else T_While T_Break T_Continue
 %token <str_val> T_Ident
 %token <int_val> T_Int_Const
 
@@ -143,7 +143,6 @@ ConstDecl
 
         #ifdef DEBUG1
         cout<<"T_Const VarType ConstDef -> ConstDecl"<<endl;
-        cout<<$3->id<<symbol_table.size()<<symbol_table[$3->id]->value<<endl;
         #endif
     }
     |   ConstDecl ',' ConstDef
@@ -155,7 +154,6 @@ ConstDecl
 
         #ifdef DEBUG1
         cout<<"ConstDecl , ConstDef -> ConstDecl"<<endl;
-        cout<<$3->id<<symbol_table.size()<<symbol_table[$3->id]->value<<endl;
         #endif
     }
 
@@ -274,6 +272,27 @@ MS
     {
         JumpStmt *ast = new JumpStmt($1,$2,$4);
         $$ = (BaseAST*)ast;
+    }
+    |   T_While '(' Expr ')' Stmt
+    {
+        #ifdef DEBUG1
+        cout<<"T_While (Expr) Stmt -> Stmt"<<endl;
+        #endif
+        WhileStmt *stmt = new WhileStmt($3,$5);
+        $$ = (BaseAST*)stmt;
+    }
+    |   T_Break ';'
+    {
+        #ifdef DEBUG1
+        cout<<"T_Break; -> Stmt"<<endl;
+        #endif
+        Stmt *stmt = new Stmt(NULL,Break,NULL);
+        $$ = (BaseAST*)stmt;
+    }
+    |   T_Continue ';'
+    {
+        Stmt *stmt = new Stmt(NULL,Continue,NULL);
+        $$ = (BaseAST*)stmt;
     }
 
 UMS
@@ -407,6 +426,9 @@ AtomExpr
     }
     |   T_Ident
     {
+        #ifdef DEBUG1
+        cout<<"T_Ident -> Expr"<<endl;
+        #endif
         Var *ast = new Var(*($1));
         delete $1;
         $$ = (BaseAST*)ast;

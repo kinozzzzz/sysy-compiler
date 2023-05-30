@@ -43,7 +43,9 @@ using namespace std;
 // 语句类型
 #define Assign 0
 #define Return 1
-#define Other 2
+#define Break 2
+#define Continue 3
+#define Other 4
 
 
 class BaseAST;
@@ -78,6 +80,7 @@ static int now_block_id;
 static int jump_stmt_id=0;
 static vector<SymbolMap> symbol_table;
 static int ifReturn = 0;    //处理重复跳转语句
+static vector<int> while_stmt_id;
 static int genTempVar()
 {
     // 生成临时变量的下标
@@ -101,7 +104,7 @@ static inline void genBlock(const char *name,int id)
     cout<<"%"<<name<<"_"<<id<<":"<<endl;
     ifReturn = 0;   //对于每个block允许return一次
 }
-static int genJumpInstr(BaseAST *s,int id);
+static int ifJumpInstr(BaseAST *s);
 static int result_id = 0;
 static int genResultId()
 {
@@ -297,6 +300,7 @@ class Stmt : public BaseAST
 
         virtual void print_koopa()
         {
+            //cout<<stmt_type<<" "<<expr<<endl;
             if(expr)
                 expr->print_koopa();
             genInstr();
@@ -322,6 +326,16 @@ class Stmt : public BaseAST
                 expr->output();
                 cout<<", "<<symbol->name;
             }
+            else if(stmt_type == Break)
+            {
+                ifReturn = 1;
+                cout<<"  jump %break_"<<*(while_stmt_id.rbegin());
+            }
+            else if(stmt_type == Continue)
+            {
+                ifReturn = 1;
+                cout<<"  jump %while_"<<*(while_stmt_id.rbegin());
+            }
             cout<<endl;
         }
 
@@ -341,10 +355,10 @@ class JumpStmt : public BaseAST
             expr = e;
             then_stmt = s1;
             else_stmt = s2;
-            id = genJumpStmtId();
         }
         virtual void print_koopa()
         {
+            id = genJumpStmtId();
             expr->print_koopa();
             int then_block,else_block;  // 表示是否要生成该基本块
             if(then_stmt)
@@ -366,12 +380,12 @@ class JumpStmt : public BaseAST
                 cout<<", %then_"<<id<<", %else_"<<id<<endl;
                 genBlock("then",id);
                 then_stmt->print_koopa();
-                ret1=genJumpInstr(then_stmt,id);
+                ret1=ifJumpInstr(then_stmt);
                 if(!ret1)
                     cout<<"  jump %end_"<<id<<endl;
                 genBlock("else",id);
                 else_stmt->print_koopa();
-                ret2=genJumpInstr(else_stmt,id);
+                ret2=ifJumpInstr(else_stmt);
                 if(!ret2)
                     cout<<"  jump %end_"<<id<<endl;
             }
@@ -380,7 +394,7 @@ class JumpStmt : public BaseAST
                 cout<<", %then_"<<id<<", %end_"<<id<<endl;
                 genBlock("then",id);
                 then_stmt->print_koopa();
-                ret1=genJumpInstr(then_stmt,id);
+                ret1=ifJumpInstr(then_stmt);
                 //cout<<ret1<<endl;
                 if(!ret1)
                     cout<<"  jump %end_"<<id<<endl;
@@ -390,7 +404,7 @@ class JumpStmt : public BaseAST
                 cout<<", %end_"<<id<<", %else_"<<id<<endl;
                 genBlock("else",id);
                 else_stmt->print_koopa();
-                ret2=genJumpInstr(else_stmt,id);
+                ret2=ifJumpInstr(else_stmt);
                 if(!ret2)
                     cout<<"  jump %end_"<<id<<endl;
             }
@@ -400,6 +414,42 @@ class JumpStmt : public BaseAST
         }
         virtual int ifJumpStmt(){return 1;}
 };
+
+class WhileStmt : public BaseAST
+{
+    public:
+        BaseAST *expr;
+        BaseAST *stmt;
+        int id;
+        WhileStmt(BaseAST *e,BaseAST *s=NULL)
+        {
+            expr = e;
+            stmt = s;
+        }
+        virtual void print_koopa()
+        {
+            id = genBlockId();
+            while_stmt_id.push_back(id);
+            cout<<"  jump %while_"<<id<<endl;
+            genBlock("while",id);
+            expr->print_koopa();
+            cout<<"  br ";
+            expr->output();
+            cout<<", %stmt_"<<id<<", %break_"<<id<<endl;
+            genBlock("stmt",id);
+            if(stmt)
+            {
+                stmt->print_koopa();
+                if(!ifJumpInstr(stmt) && !ifReturn)
+                    cout<<"  jump %while_"<<id<<endl;
+            }
+            else
+                cout<<"  jump %while_"<<id<<endl;
+            genBlock("break",id);
+            while_stmt_id.pop_back();
+        }
+};
+
 class Expr : public BaseAST
 {
     public:
@@ -648,10 +698,6 @@ class Block : public BaseAST
                 if(ifReturn)
                     break;
                 stmts[i]->print_koopa();
-                if(stmts[i]->ifStmt() && ((Stmt*)stmts[i])->stmt_type == Return)
-                {
-                    break;
-                }
             }
             delSymbolMap(*(symbol_table.rbegin()));
             symbol_table.pop_back();
@@ -703,9 +749,9 @@ class CompUnit : public BaseAST
         }
 };
 
-// 返回0表示最后生成了jump语句
-// 返回1表示基本块的最后是ret语句
-static int genJumpInstr(BaseAST *s,int id)
+// 返回0表示需要生成jump语句
+// 返回1表示基本块的最后是ret语句或其他不需要再生成jump的语句
+static int ifJumpInstr(BaseAST *s)
 {
     //cout<<s->ifStmt()<<s->ifBlock()<<endl;
     if(s->ifStmt())
@@ -714,11 +760,14 @@ static int genJumpInstr(BaseAST *s,int id)
         //cout<<stmt->stmt_type<<endl;
         if(stmt->stmt_type == Return)
             return 1;
+        if(stmt->stmt_type == Break || stmt->stmt_type == Continue)
+            return 1;
     }
     else if(s->ifBlock())
     {
         Block *block = (Block*)s;
-        return genJumpInstr(*((block->stmts).rbegin()),id);
+        if(block->ifEmptyBlock()) return 0;
+        return ifJumpInstr(*((block->stmts).rbegin()));
     }
     else if(s->ifJumpStmt())
     {
@@ -726,9 +775,9 @@ static int genJumpInstr(BaseAST *s,int id)
         JumpStmt *stmt = (JumpStmt*)s;
         int ret1=0,ret2=0;
         if(stmt->then_stmt)
-            ret1 = genJumpInstr(stmt->then_stmt,id);
+            ret1 = ifJumpInstr(stmt->then_stmt);
         if(stmt->else_stmt)
-            ret2 = genJumpInstr(stmt->else_stmt,id);
+            ret2 = ifJumpInstr(stmt->else_stmt);
         return ret1 && ret2;
     }
     return 0;
