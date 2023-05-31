@@ -4,8 +4,9 @@
 #include <stdio.h>
 
 extern FILE *yyin;
-extern int yyparse(std::unique_ptr<CompUnit> &comp);
-extern void yyerror(std::unique_ptr<CompUnit> &comp,const char*);
+extern int yyparse(Program **program);
+extern void yyerror(Program **program,const char*);
+
 
 int main(int argc,char* argv[])
 {
@@ -37,8 +38,8 @@ int main(int argc,char* argv[])
     #ifndef DEBUG
     freopen(out_file,"w",stdout);
     #endif
-    auto answer = std::make_unique<CompUnit>();
-    yyparse(answer);
+    Program * answer;
+    yyparse(&answer);
     #ifdef DEBUG
     cout<< "finish yyparse()"<<endl;
     #endif

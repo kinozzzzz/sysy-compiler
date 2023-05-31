@@ -13,7 +13,7 @@
 using namespace std;
 
 extern int yylex();
-extern void yyerror(std::unique_ptr<CompUnit> &comp, const char *s);
+extern void yyerror(Program **program, const char *s);
 %}
 
 
@@ -24,58 +24,137 @@ extern void yyerror(std::unique_ptr<CompUnit> &comp, const char *s);
     DeclareDef *def_val;
     BlockItems *items_val;
     Decls *decl_val;
+    Program *pro_val;
 }
 
 
-%parse-param {std::unique_ptr<CompUnit> &comp}
+%parse-param {Program **program}
 %token T_Int T_Ret T_Logic_And T_Logic_Or T_Const T_If T_Else T_While T_Break T_Continue
+%token T_Void
 %token <str_val> T_Ident
 %token <int_val> T_Int_Const
 
-%type <ast_val> FuncDef FuncType Block Stmt Number Expr AtomExpr AndExpr AddSubExpr MulDivExpr EqualExpr CompareExpr UnaryExpr
-%type <ast_val> BlockItem MS UMS IfExpr
+%type <ast_val> FuncDef Block Stmt Number Expr AtomExpr AndExpr AddSubExpr MulDivExpr EqualExpr CompareExpr UnaryExpr
+%type <ast_val> BlockItem MS UMS IfExpr FuncRealParams CompUnit
 %type <int_val> UnaryOp AddSubOp MulDivOp CompareOp EqualOp 
 %type <int_val> VarType
-%type <def_val> ConstDef VarDef
-%type <items_val> BlockItems
-%type <decl_val> VarDecl Decl ConstDecl
+%type <def_val> ConstDef VarDef 
+%type <items_val> BlockItems 
+%type <decl_val> VarDecl Decl ConstDecl FuncParams
+%type <pro_val> CompUnits
 
 %%
-CompUnit
-    :   FuncDef
+Program
+    :   CompUnits
     {
-        auto ast = std::make_unique<CompUnit>();
-        ast->func_def = $1;
-        comp = std::move(ast);
-        //printf("Comp\n");
-    };
+        #ifdef DEBUG1
+        cout<<"CompUnits -> Program"<<endl;
+        #endif
+        *program = $1;
+    }
+
+CompUnits
+    :   CompUnit
+    {
+        #ifdef DEBUG1
+        cout<<"CompUnit -> CompUnits"<<endl;
+        #endif
+        Program *pro = new Program();
+        pro->units.push_back($1);
+        $$ = pro;
+    }
+    |   CompUnits CompUnit
+    {
+        #ifdef DEBUG1
+        cout<<"CompUnits CompUnit -> CompUnits"<<endl;
+        #endif
+        ($1->units).push_back($2);
+        $$ = $1;
+    }
+
+CompUnit
+    :   Decl
+    {
+        $$ = $1;
+    }
+    |   FuncDef
+    {
+        $$ = $1;
+    }
 
 FuncDef
-    :   FuncType T_Ident '(' ')' Block
+    :   VarType T_Ident '(' ')' Block
     {
-        //printf("FuncDef\n");
+        #ifdef DEBUG1
+        cout<<"VarType T_Ident () Block -> FuncDef"<<endl;
+        #endif
         FuncDef* ast = new FuncDef();
         ast->func_type = $1;
         ast->id = *($2);
         delete $2;
         ast->block = $5;
         $$ = (BaseAST*)ast;
-    };
-
-FuncType
-    :   T_Int
+    }
+    |   VarType T_Ident '(' FuncParams ')' Block
     {
-        FuncType* ast = new FuncType();
-        ast->type_name = "i32";
+        #ifdef DEBUG1
+        cout<<"VarType T_Ident (FuncParams) Block"<<endl;
+        #endif
+        FuncDef* ast = new FuncDef();
+        ast->func_type = $1;
+        ast->id = *($2);
+        delete $2;
+        ast->block = $6;
+        ast->params = $4->defs;
         $$ = (BaseAST*)ast;
-        //printf("FuncType\n");
-    };
+    }
+
+FuncParams
+    :   VarType T_Ident
+    {
+        #ifdef DEBUG1
+        cout<<"T_Int T_Ident -> FuncParams"<<endl;
+        #endif
+        Decls *decl = new Decls();
+        DeclareDef *def = new DeclareDef(*($2));
+        def->declType = ParamDecl;
+        delete $2;
+        (decl->defs).push_back(def);
+        $$ = decl;
+    }
+    |   FuncParams ',' VarType T_Ident
+    {
+        DeclareDef *def = new DeclareDef(*($4));
+        def->declType = ParamDecl;
+        delete $4;
+        ($1->defs).push_back(def);
+        $$ = $1;
+    }
+
+FuncRealParams
+    :   Expr
+    {
+        FuncCall *call = new FuncCall();
+        (call->params).push_back($1);
+        $$ = (BaseAST*)call;
+    }
+    |   FuncRealParams ',' Expr
+    {
+        (((FuncCall*)$1)->params).push_back($3);
+        $$ = $1;
+    }
 
 VarType
     :   T_Int
     {
         $$ = TypeInt;
+        //printf("VarType\n");
     }
+    |   T_Void
+    {
+        $$ = TypeVoid;
+    }
+
 
 Block
     :   '{' BlockItems '}'
@@ -125,10 +204,16 @@ BlockItem
 Decl
     :   ConstDecl ';'
     {
+        #ifdef DEBUG1
+        cout<<"ConstDecl; -> Decl"<<endl;
+        #endif
         $$ = $1;
     }
     |   VarDecl ';'
     {
+        #ifdef DEBUG1
+        cout<<"VarDecl; -> Decl"<<endl;
+        #endif
         $$ = $1;
     }
 
@@ -236,6 +321,11 @@ MS
         Stmt* ast = new Stmt($2,Return);
         $$ = (BaseAST*)ast;
         //printf("stmt\n");
+    }
+    |   T_Ret ';'
+    {
+        Stmt* ast = new Stmt(NULL,Return);
+        $$ = (BaseAST*)ast;
     }
     |   T_Ident '=' Expr ';'
     {
@@ -421,7 +511,9 @@ AtomExpr
     }
     |   Number
     {
-        //cout<<"Number -> AtomExpr"<<endl;
+        #ifdef DEBUG1
+        cout<<"Number -> AtomExpr"<<endl;
+        #endif
         $$ = $1;
     }
     |   T_Ident
@@ -432,6 +524,19 @@ AtomExpr
         Var *ast = new Var(*($1));
         delete $1;
         $$ = (BaseAST*)ast;
+    }
+    |   T_Ident '(' FuncRealParams ')'
+    {
+        ((FuncCall*)$3)->name = *($1);
+        delete $1;
+        $$ = $3;
+    }
+    |   T_Ident '(' ')'
+    {
+        FuncCall *call = new FuncCall();
+        call->name = *($1);
+        delete $1;
+        $$ = (BaseAST*)call;
     }
     
 UnaryOp
@@ -510,7 +615,7 @@ Number
     };
 %%
 
-extern void yyerror(unique_ptr<CompUnit> &comp,const char* s)
+extern void yyerror(Program **program,const char* s)
 {
     cout<<"error:"<<s<<endl;
 }

@@ -33,6 +33,7 @@ CommentLines    \/\*(?:[^\*]|\*+[^\/\*])*\*+\/
 "while"         {return T_While;}
 "break"         {return T_Break;}
 "continue"      {return T_Continue;}
+"void"          {return T_Void;}
 
 {Identifier}    {yylval.str_val = new string(yytext);return T_Ident;}
 {Decimal}       {yylval.int_val = strtol(yytext,nullptr,0);return T_Int_Const;}

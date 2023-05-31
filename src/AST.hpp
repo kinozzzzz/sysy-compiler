@@ -36,9 +36,11 @@ using namespace std;
 // 声明类型
 #define VarDecl 0
 #define ConstDecl 1
+#define ParamDecl 2
 
 // 变量类型
 #define TypeInt 0
+#define TypeVoid 1
 
 // 语句类型
 #define Assign 0
@@ -78,7 +80,8 @@ static int temp_var_range=0;
 static int block_range=0;
 static int now_block_id;
 static int jump_stmt_id=0;
-static vector<SymbolMap> symbol_table;
+static vector<SymbolMap> symbol_table(1);
+static map<string,int> func_table;
 static int ifReturn = 0;    //处理重复跳转语句
 static vector<int> while_stmt_id;
 static int genTempVar()
@@ -94,9 +97,9 @@ static int genJumpStmtId()
 {
     return jump_stmt_id++;
 }
-static void Error()
+static void Error(const char *message)
 {
-    cout<<"error";
+    cout<<"error"<<message<<endl;
     exit(0);
 }
 static inline void genBlock(const char *name,int id)
@@ -126,7 +129,7 @@ static Symbol* findSymbol(string &id)
         if(symbol_table[i].count(id))
             return symbol_table[i][id];
     }
-    Error();
+    Error("Can't find the symbol in symbol table");
     return NULL;
 }
 
@@ -226,7 +229,7 @@ class DeclareDef : BaseAST
     public:
         BaseAST *expr;
         string id;
-        int declType;
+        int declType=VarDecl;
         int type=TypeInt;
 
         DeclareDef(string varId,BaseAST *e=NULL)
@@ -269,6 +272,12 @@ class DeclareDef : BaseAST
             {
                 int value = expr->eval();
                 symbol = new Symbol(ConstDecl,name,type,value);
+            }
+            else if(declType == ParamDecl)
+            {
+                symbol = new Symbol(VarDecl,name,type);
+                cout<<"  "<<name<<" = alloc i32"<<endl;
+                cout<<"  store @"<<id<<", "<<name<<endl;
             }
 
             if(symbol_table[depth].count(id))
@@ -315,7 +324,8 @@ class Stmt : public BaseAST
             {
                 ifReturn = 1;
                 cout<<"  ret ";
-                expr->output();
+                if(expr)
+                    expr->output();
             }
             else if(stmt_type == Assign)
             {
@@ -337,6 +347,7 @@ class Stmt : public BaseAST
                 cout<<"  jump %while_"<<*(while_stmt_id.rbegin());
             }
             cout<<endl;
+            
         }
 
         virtual int ifStmt(){return 1;}
@@ -668,15 +679,49 @@ class Expr : public BaseAST
 
 class Decls : public BaseAST
 {
+    /*
+        传递变量定义的中间类
+        现用来表达全局变量
+    */
     public:
         vector<DeclareDef*> defs;
         int type;
-        Decls(int t)
+        Decls(int t=TypeInt)
         {
             type = t;
         }
         virtual int ifDecls(){return 1;}
-        virtual void print_koopa(){}
+        virtual void print_koopa()
+        {
+            for(int i=0;i < defs.size();i++)
+            {
+                Symbol *symbol;
+                if(defs[i]->declType == ConstDecl)
+                {
+                    int value = (defs[i]->expr)->eval();
+                    symbol = new Symbol(ConstDecl,defs[i]->id,defs[i]->type,value);
+                }
+                else if(defs[i]->declType == VarDecl)
+                {
+                    string id = string("@global_") + defs[i]->id;
+                    cout<<"global "<<id<<" = alloc i32, ";
+                    if(defs[i]->expr)
+                    {
+                        int value = (defs[i]->expr)->eval();
+                        symbol = new Symbol(VarDecl,id,defs[i]->type,value);
+                        cout<<value<<endl;
+                    }
+                    else
+                    {
+                        symbol = new Symbol(VarDecl,id,defs[i]->type);
+                        cout<<0<<endl;
+                    }
+                }
+                symbol_table[0].emplace(defs[i]->id,symbol);
+            }
+            if(defs[0]->declType == VarDecl)
+                cout<<endl;
+        }
 };
 
 class Block : public BaseAST
@@ -687,7 +732,7 @@ class Block : public BaseAST
         virtual void print_koopa()
         {
             #ifdef DEBUG2
-            //cout<<"size of stmts:"<<stmts.size()<<endl;
+            //cout<<"stmts in block: "<<stmts.size()<<endl;
             #endif
             SymbolMap new_map;
             symbol_table.push_back(new_map);
@@ -709,43 +754,129 @@ class Block : public BaseAST
         }
 };
 
-class FuncType : public BaseAST
-{
-    public:
-        std::string type_name;
-
-        virtual void print_koopa()
-        {
-            cout<<type_name<<" ";
-        }
-};
-
 class FuncDef : public BaseAST
 {
     public:
-        BaseAST* func_type;
+        int func_type;
         string id;
         BaseAST* block;
+        vector<DeclareDef*> params;
 
         virtual void print_koopa()
         {
+            func_table.emplace(id,func_type);
+            ifReturn = 0;
             cout<<"fun @";
-            cout<<id<<"(): ";
-            func_type->print_koopa();
-            cout<<"{\n%"<<"entry:\n";
+            cout<<id<<"(";
+            for(int i=0;i < int(params.size())-1;i++)
+            {
+                cout<<"@"<<params[i]->id<<": ";
+                if(params[i]->type == TypeInt)
+                    cout<<"i32, ";
+            }
+            if(params.size() != 0)
+            {
+                cout<<"@"<<(*params.rbegin())->id<<": ";
+                if((*params.rbegin())->type == TypeInt)
+                    cout<<"i32";
+            }
+            cout<<")";
+            if(func_type == TypeInt)
+                cout<<": i32";
+            cout<<" {\n%"<<"entry:\n";
+            for(int i=params.size()-1;i >= 0;i--)
+                ((Block*)block)->stmts.insert(((Block*)block)->stmts.begin(),(BaseAST*)params[i]);
+            if(func_type==TypeInt)
+            {
+                Number *num = new Number();
+                num->num = 0;
+                Stmt *stmt = new Stmt((BaseAST*)num,Return);
+                ((Block*)block)->stmts.push_back((BaseAST*)stmt);
+            }
+            else if(func_type == TypeVoid)
+            {
+                Stmt *stmt = new Stmt(NULL,Return);
+                ((Block*)block)->stmts.push_back((BaseAST*)stmt);
+            }
             block->print_koopa();
-            cout<<"}";
+            cout<<"}\n\n";
         }
 };
 
-class CompUnit : public BaseAST
+class Program : public BaseAST
 {
     public:
-        BaseAST* func_def;
+        vector<BaseAST*> units;
 
         virtual void print_koopa()
         {
-            func_def->print_koopa();
+            cout<<"decl @getint(): i32"<<endl;
+            func_table.emplace(string("getint"),TypeInt);
+            cout<<"decl @getch(): i32"<<endl;
+            func_table.emplace(string("getch"),TypeInt);
+            cout<<"decl @getarray(*i32): i32"<<endl;
+            func_table.emplace(string("getarray"),TypeInt);
+            cout<<"decl @putint(i32)"<<endl;
+            func_table.emplace(string("putint"),TypeVoid);
+            cout<<"decl @putch(i32)"<<endl;
+            func_table.emplace(string("putch"),TypeVoid);
+            cout<<"decl @putarray(i32, *i32)"<<endl;
+            func_table.emplace(string("putarray"),TypeVoid);
+            cout<<"decl @starttime()"<<endl;
+            func_table.emplace(string("starttime"),TypeVoid);
+            cout<<"decl @stoptime()"<<endl;
+            func_table.emplace(string("stoptime"),TypeVoid);
+            cout<<endl;
+
+            for(int i=0;i < units.size();i++)
+            {
+                if(units[i]->ifDecls())
+                    units[i]->print_koopa();
+            }
+            for(int i=0;i < units.size();i++)
+            {
+                if(!units[i]->ifDecls())
+                    units[i]->print_koopa();
+            }
+        }
+};
+
+class FuncCall : public BaseAST
+{
+    public:
+        string name;
+        vector<BaseAST*> params;
+        int temp_var;
+
+        virtual void print_koopa()
+        {
+            #ifdef DEBUG2
+            cout<<"FuncCall "<<name<<endl;
+            #endif
+            int type = func_table[name];
+            temp_var = genTempVar();
+            for(int i=0;i < params.size();i++)
+                params[i]->print_koopa();
+            //cout<<type<<endl;
+            cout<<"  ";
+            if(type == TypeInt)
+            {
+                cout<<"%"<<temp_var<<" = ";
+            }
+            cout<<"call @"<<name<<"(";
+            for(int i=0;i < int(params.size())-1;i++)
+            {
+                params[i]->output();
+                cout<<",";
+            }
+            if(params.size() != 0)
+                (*params.rbegin())->output();
+            cout<<")"<<endl;
+        }
+
+        virtual void output()
+        {
+            cout<<"%"<<temp_var;
         }
 };
 
