@@ -1,4 +1,5 @@
 #include "AST.hpp"
+#include "riscv.hpp"
 #include <memory>
 #include <string.h>
 #include <stdio.h>
@@ -35,14 +36,26 @@ int main(int argc,char* argv[])
         }
     }
     freopen(in_file,"r",stdin);
-    #ifndef DEBUG
-    freopen(out_file,"w",stdout);
-    #endif
     Program * answer;
     yyparse(&answer);
     #ifdef DEBUG
     cout<< "finish yyparse()"<<endl;
     #endif
     if(omode == KOOPA_MODE)
+    {
+        #ifndef DEBUG
+        freopen(out_file,"w",stdout);
+        #endif
         answer->print_koopa();
+    }
+    if(omode == RISCV_MODE)
+    {
+        freopen("koopa.txt","w",stdout);
+        answer->print_koopa();
+        FILE* ff=fopen("whatever.txt","r");
+        char *buf=(char *)malloc(1000000);
+        fread(buf, 1,1000000, ff);
+        freopen(out_file,"w",stdout);
+        print_riscv(buf);
+    }
 }
