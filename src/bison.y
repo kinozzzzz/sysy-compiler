@@ -25,6 +25,7 @@ extern void yyerror(Program **program, const char *s);
     BlockItems *items_val;
     Decls *decl_val;
     Program *pro_val;
+    Var *var_val;
 }
 
 
@@ -36,12 +37,14 @@ extern void yyerror(Program **program, const char *s);
 
 %type <ast_val> FuncDef Block Stmt Number Expr AtomExpr AndExpr AddSubExpr MulDivExpr EqualExpr CompareExpr UnaryExpr
 %type <ast_val> BlockItem MS UMS IfExpr FuncRealParams CompUnit
+%type <ast_val> InitVal InitVals
 %type <int_val> UnaryOp AddSubOp MulDivOp CompareOp EqualOp 
 %type <int_val> VarType
-%type <def_val> ConstDef VarDef 
+%type <def_val> ConstDef VarDef FuncParam FuncArrayParam
 %type <items_val> BlockItems 
 %type <decl_val> VarDecl Decl ConstDecl FuncParams
 %type <pro_val> CompUnits
+%type <var_val> Var
 
 %%
 Program
@@ -110,24 +113,46 @@ FuncDef
     }
 
 FuncParams
-    :   VarType T_Ident
+    :   FuncParam
     {
         #ifdef DEBUG1
         cout<<"T_Int T_Ident -> FuncParams"<<endl;
         #endif
         Decls *decl = new Decls();
+        (decl->defs).push_back($1);
+        $$ = decl;
+    }
+    |   FuncParams ',' FuncParam
+    {
+        ($1->defs).push_back($3);
+        $$ = $1;
+    }
+
+FuncParam
+    :   VarType T_Ident
+    {
         DeclareDef *def = new DeclareDef(*($2));
         def->declType = ParamDecl;
         delete $2;
-        (decl->defs).push_back(def);
-        $$ = decl;
+        $$ = def;
     }
-    |   FuncParams ',' VarType T_Ident
+    |   FuncArrayParam
     {
-        DeclareDef *def = new DeclareDef(*($4));
+        $$ = $1;
+    }
+
+FuncArrayParam
+    :   VarType T_Ident '[' ']' 
+    {
+        DeclareDef *def = new DeclareDef(*($2));
         def->declType = ParamDecl;
-        delete $4;
-        ($1->defs).push_back(def);
+        def->type = TypePointer;
+        delete $2;
+        $$ = def;
+    }
+    |   FuncArrayParam '[' Expr ']'
+    {
+        ($1->offset).push_back($3);
         $$ = $1;
     }
 
@@ -268,38 +293,103 @@ VarDecl
     }
 
 VarDef
-    :   T_Ident
+    :   Var
     {
         #ifdef DEBUG1
         cout<<"T_Ident -> VarDef"<<endl;
         #endif
 
-        DeclareDef *def = new DeclareDef(*($1));
+        DeclareDef *def = new DeclareDef($1->id);
+        def->offset = $1->offset;
         delete $1;
         $$ = def;
     }
-    |   T_Ident '=' Expr
+    |   Var '=' InitVal
     {
         #ifdef DEBUG1
         cout<<"T_Ident = Expr -> VarDef"<<endl;
         #endif
 
-        DeclareDef *def = new DeclareDef(*($1),$3);
+        DeclareDef *def = new DeclareDef($1->id,$3);
+        def->offset = $1->offset;
         delete $1;
         $$ = def;
     }
 
 ConstDef
-    :   T_Ident '=' Expr
+    :  Var '=' InitVal
     {
         #ifdef DEBUG1
         cout<<"T_Ident = Expr -> ConstDef"<<endl;
         #endif
 
-        DeclareDef *def = new DeclareDef(*($1),$3);
+        DeclareDef *def = new DeclareDef($1->id,$3);
+        def->offset = $1->offset;
         delete $1;
         $$ = def;
     }
+
+InitVals
+    :   InitVal
+    {
+        InitVal *init = new InitVal();
+        init->inits.push_back($1);
+        $$ = init;
+
+        #ifdef DEBUG1
+        cout<<"InitVal -> InitVals"<<endl;
+        #endif
+    }
+    |   InitVals ',' InitVal
+    {
+        ((InitVal*)$1)->inits.push_back($3);
+        $$ = $1;
+        #ifdef DEBUG1
+        cout<<"InitVals , InitVal -> InitVals"<<endl;
+        #endif
+    }
+
+InitVal
+    :   Expr
+    {
+        #ifdef DEBUG1
+        cout<<"Expr -> InitVal"<<endl;
+        #endif
+        $$ = $1;
+    }
+    |   '{' InitVals '}'
+    {
+        #ifdef DEBUG1
+        cout<<"{ InitVals } -> InitVal"<<endl;
+        #endif
+        $$ = $2;
+    }
+    |   '{' '}'
+    {
+        #ifdef DEBUG1
+        cout<<"{} -> InitVal"<<endl;
+        #endif
+        $$ = NULL;
+    }
+
+Var
+    :   T_Ident
+    {
+        #ifdef DEBUG1
+        cout<<"T_Ident -> Var"<<endl;
+        #endif
+        Var *var = new Var(*($1));
+        delete $1;
+        $$ = var;
+    }
+    |   Var '[' Expr ']'
+    {
+        #ifdef DEBUG1
+        cout<<"Var[Expr] -> Var"<<endl;
+        #endif
+        $1->offset.push_back($3);
+        $$ = $1;
+    }   
 
 Stmt
     :   MS
@@ -327,7 +417,7 @@ MS
         Stmt* ast = new Stmt(NULL,Return);
         $$ = (BaseAST*)ast;
     }
-    |   T_Ident '=' Expr ';'
+    |   Var '=' Expr ';'
     {
         #ifdef DEBUG1
         cout<<"T_Ident = Expr; -> Stmt"<<endl;
@@ -406,6 +496,9 @@ IfExpr
 Expr
     :   AndExpr
     {
+        #ifdef DEBUG1
+        cout<<"AndExpr -> Expr"<<endl;
+        #endif
         $$ = $1;
     }
     |   Expr T_Logic_Or AndExpr    //最低的运算符优先级: ||
@@ -516,14 +609,12 @@ AtomExpr
         #endif
         $$ = $1;
     }
-    |   T_Ident
+    |   Var
     {
         #ifdef DEBUG1
         cout<<"T_Ident -> Expr"<<endl;
         #endif
-        Var *ast = new Var(*($1));
-        delete $1;
-        $$ = (BaseAST*)ast;
+        $$ = $1;
     }
     |   T_Ident '(' FuncRealParams ')'
     {
@@ -617,5 +708,5 @@ Number
 
 extern void yyerror(Program **program,const char* s)
 {
-    cout<<"error:"<<s<<endl;
+    cout<<"error: "<<s<<endl;
 }

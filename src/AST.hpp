@@ -37,10 +37,12 @@ using namespace std;
 #define VarDecl 0
 #define ConstDecl 1
 #define ParamDecl 2
+#define ArrayDecl 3
 
-// 变量类型
+// 变量类型,如int或string等
 #define TypeInt 0
 #define TypeVoid 1
+#define TypePointer 2    // 通俗的指针类型，包括指针数组
 
 // 语句类型
 #define Assign 0
@@ -50,10 +52,12 @@ using namespace std;
 #define Other 4
 
 
+
 class BaseAST;
 class Expr;
 class Stmt;
 class JumpStmt;
+class InitVal;
 
 class Symbol
 {
@@ -61,8 +65,8 @@ class Symbol
         int declType;
         int type;
         int value;
-        int temp_var=-1;
         int ifAlloc = 0;
+        int len = 0;
         string name;
 
         Symbol(int dtp,string n,int tp = TypeInt,int v=0)
@@ -74,6 +78,28 @@ class Symbol
         }
 };
 
+class FuncInfo
+{
+    public:
+        int func_type;
+        vector<int> param_type;
+        FuncInfo(){}
+        FuncInfo(int type)
+        {
+            func_type = type;
+        }
+        FuncInfo(int type,vector<int> param)
+        {
+            func_type = type;
+            param_type = param;
+        }
+        FuncInfo(const FuncInfo &a)
+        {
+            func_type = a.func_type;
+            param_type = a.param_type;
+        }
+};
+
 typedef map<string,Symbol*> SymbolMap;
 
 static int temp_var_range=0;
@@ -81,7 +107,7 @@ static int block_range=0;
 static int now_block_id;
 static int jump_stmt_id=0;
 static vector<SymbolMap> symbol_table(1);
-static map<string,int> func_table;
+static map<string,FuncInfo*> func_table;
 static int ifReturn = 0;    //处理重复跳转语句
 static vector<int> while_stmt_id;
 static int genTempVar()
@@ -99,7 +125,7 @@ static int genJumpStmtId()
 }
 static void Error(const char *message)
 {
-    cout<<"error"<<message<<endl;
+    cout<<"error: "<<message<<endl;
     exit(0);
 }
 static inline void genBlock(const char *name,int id)
@@ -133,6 +159,32 @@ static Symbol* findSymbol(string &id)
     return NULL;
 }
 
+static void printType(int type,vector<int> offset)
+{
+    if(offset.size() == 0)
+    {
+        if(type == TypeInt || type == TypePointer)
+            cout<<"i32";
+    }
+    else
+    {
+        cout<<"[";
+        int o = offset[0];
+        offset.erase(offset.begin());
+        printType(type,offset);
+        cout<<", "<<o<<"]";
+    }
+}
+
+static void printConstInit(InitVal *init,vector<int> offset);
+static void printVarInit(InitVal *init,vector<int> offset,string id,int now_num);
+
+static int ptr_id=0;
+static int genPtrId()
+{
+    return ptr_id++;
+}
+
 class BlockItems
 {
     public:
@@ -156,27 +208,68 @@ class BaseAST
         virtual int ifBlock(){return 0;}
         virtual int ifEmptyBlock(){return 0;}
         virtual int ifJumpStmt(){return 0;}
+        virtual int ifInitVal(){return 0;}
+        virtual void load_array(){}
 };
 
 class Var : public BaseAST    // 表示变量
 {
     public:
-        string id_name;
+        string id;
+        vector<BaseAST*> offset;
+        int ptr_id = -1;
+        int temp_var = -1;
 
         Var(string a)
         {
-            id_name = a;
+            id = a;
         }
 
         virtual void print_koopa()
         {
             // 变量的print_koopa函数对应将变量移入临时变量(寄存器)的过程
             // 由于koopa奇特的规则，决定每次使用变量时都将变量的值移入temp_var中
-            Symbol *symbol = findSymbol(id_name);
-            if(symbol->declType != ConstDecl)
+            Symbol *symbol = findSymbol(id);
+            if(symbol->declType == VarDecl)
             {
-                symbol->temp_var = genTempVar();
-                cout<<"  %"<<symbol->temp_var<<" = load "<<symbol->name<<endl;
+                temp_var = genTempVar();
+                cout<<"  %"<<temp_var<<" = load "<<symbol->name<<endl;
+            }
+            else if(symbol->declType == ArrayDecl)
+            {
+                load_array();
+                temp_var = genTempVar();
+                cout<<"  %"<<temp_var<<" = load %ptr_"<<ptr_id<<endl;
+            }
+        }
+
+        virtual void load_array()
+        {
+            if(offset.size() == 0)
+                return;
+            Symbol *symbol = findSymbol(id);
+            int old_ptr_id;
+            ptr_id = genPtrId();
+            offset[0]->print_koopa();
+            if(symbol->type != TypePointer)
+                cout<<"  %ptr_"<<ptr_id<<" = getelemptr "<<symbol->name<<", ";
+            else
+            {
+                cout<<"  %ptr_"<<ptr_id<<" = load "<<symbol->name<<endl;
+                old_ptr_id = ptr_id;
+                ptr_id = genPtrId();
+                cout<<"  %ptr_"<<ptr_id<<" = getptr %ptr_"<<old_ptr_id<<", ";
+            }
+            offset[0]->output();
+            cout<<endl;
+            for(int i=1;i < offset.size();i++)
+            {
+                old_ptr_id = ptr_id;
+                ptr_id = genPtrId();
+                offset[i]->print_koopa();
+                cout<<"  %ptr_"<<ptr_id<<" = getelemptr %ptr_"<<old_ptr_id<<", ";
+                offset[i]->output();
+                cout<<endl;
             }
         }
 
@@ -184,24 +277,51 @@ class Var : public BaseAST    // 表示变量
         {
             // var： 输出此时存在哪个临时变量中
             // const： 输出const的值
-            Symbol *symbol = findSymbol(id_name);
-            //cout<<symbol->declType<<endl;
+            Symbol *symbol = findSymbol(id);
             if(symbol->declType == ConstDecl)
-            {
-
                 cout<<symbol->value;
-            }
-            else
+            else if(symbol->declType == VarDecl)
             {
-                cout<<"%"<<symbol->temp_var;
+                if(temp_var != -1)
+                    cout<<"%"<<temp_var;    // 每次用之前都会先取一下
+                else
+                    cout<<symbol->name;
+            }
+            else if(symbol->declType == ArrayDecl)
+            {
+                if(offset.size() == 0)
+                {
+                    cout<<symbol->name;
+                    return;
+                }
+                if(temp_var != -1)
+                    cout<<"%"<<temp_var;
+                else
+                    cout<<"%ptr_"<<ptr_id;
             }
         }
 
         virtual int eval()
         {
-            return findSymbol(id_name)->value;
+            return findSymbol(id)->value;
         }
         virtual int ifVar(){return 1;}
+};
+
+class InitVal : public BaseAST
+{
+    public:
+        vector<BaseAST*> inits;
+        virtual void print_koopa()
+        {
+            for(int i=0;i < inits.size();i++)
+            {
+                if(inits[i] == NULL)
+                    continue;
+                inits[i]->print_koopa();
+            }
+        }
+        virtual int ifInitVal(){return 1;}
 };
 
 class Number : public BaseAST
@@ -224,72 +344,113 @@ class Number : public BaseAST
         }
 };
 
-class DeclareDef : BaseAST
+class DeclareDef : public BaseAST
 {
     public:
-        BaseAST *expr;
-        string id;
+        string name;
+        BaseAST *init;
         int declType=VarDecl;
         int type=TypeInt;
+        vector<BaseAST*> offset;
 
-        DeclareDef(string varId,BaseAST *e=NULL)
+        DeclareDef(string n,BaseAST *e=NULL)
         {
-            id = varId;
-            expr = e;
+            name = n;
+            init = e;
         }
         virtual void print_koopa()
         {
+            // 非全局变量的声明
             #ifdef DEBUG2
             cout<<"koopa: DeclareDef"<<endl;
-            cout<<"     "<<declType<<endl;
             #endif
             Symbol *symbol;
             int depth = symbol_table.size() - 1;
-            string name = string("@_") + to_string(now_block_id) + id;
-            if(declType == VarDecl)
+            string id = string("@_") + to_string(now_block_id) + name;
+            if(declType == ConstDecl && offset.size() == 0)
             {
-                symbol = new Symbol(VarDecl,name,type);
+                // 不是数组的常量
+                int value = init->eval();
+                symbol = new Symbol(ConstDecl,id,type,value);
+            }
+
+            else if(declType == VarDecl && offset.size() == 0)
+            {
+                symbol = new Symbol(VarDecl,id,type);
                 // 如果这个变量还没有分配过内存，那么就分配内存
-                if(!(symbol_table[depth].count(id) && symbol_table[depth][id]->ifAlloc))
+                if(!(symbol_table[depth].count(name) && symbol_table[depth][name]->ifAlloc))
                 {
-                    cout<<"  "<<name<<" = alloc ";
+                    cout<<"  "<<id<<" = alloc ";
                     if(type == TypeInt)
                         cout<<"i32";
                     cout<<endl;
                     symbol->ifAlloc = 1;
                 }
-                if(expr != NULL)
+                if(init != NULL)
                 {
-                    expr->print_koopa();
-                    int value = expr->eval();
+                    init->print_koopa();
+                    int value = init->eval();
                     cout<<"  store ";
-                    expr->output();
-                    cout<<", "<<name<<endl;
+                    init->output();
+                    cout<<", "<<id<<endl;
                     symbol->value = value;
                 }
             }
-            else if(declType == ConstDecl)
-            {
-                int value = expr->eval();
-                symbol = new Symbol(ConstDecl,name,type,value);
-            }
+
             else if(declType == ParamDecl)
             {
-                symbol = new Symbol(VarDecl,name,type);
-                cout<<"  "<<name<<" = alloc i32"<<endl;
-                cout<<"  store @"<<id<<", "<<name<<endl;
+                if(type == TypePointer)
+                {
+                    symbol = new Symbol(ArrayDecl,id,type);
+                    symbol->len = offset.size();
+                }
+                else
+                    symbol = new Symbol(VarDecl,id,type);
+                cout<<"  "<<id<<" = alloc ";
+                vector<int> temp;
+                for(int i=0;i < offset.size();i++)
+                    temp.push_back(offset[i]->eval());
+                if(type == TypePointer) cout<<"*";
+                printType(type,temp);
+                cout<<endl;
+                cout<<"  store @"<<name<<", "<<id<<endl;
             }
 
-            if(symbol_table[depth].count(id))
+            else if(offset.size() != 0)
             {
-                symbol->ifAlloc = symbol_table[depth][id]->ifAlloc;
-                symbol_table[depth][id] = symbol;
+                vector<int> temp;
+                for(int i=0;i < offset.size();i++)
+                    temp.push_back(offset[i]->eval());
+                symbol = new Symbol(ArrayDecl,id,type);
+                symbol->len = offset.size();
+                cout<<"  "<<id<<" = alloc ";
+                printType(type,temp);
+                cout<<endl;
+                cout<<"  store zeroinit, "<<id<<endl;
+                if(init != NULL)
+                {
+                    vector<int> vec;
+                    vec.push_back(1);
+                    int num=1;
+                    for(int j=int(temp.size())-1;j >= 0;j--)
+                    {
+                        num = num * temp[j];
+                        vec.push_back(num);
+                    }
+                    vec.pop_back();
+                    printVarInit((InitVal*)init,vec,id,0);
+                }
+            }
+
+            if(symbol_table[depth].count(name))
+            {
+                symbol->ifAlloc = symbol_table[depth][name]->ifAlloc;
+                symbol_table[depth][name] = symbol;
             }
             else
             {
-                symbol_table[depth].emplace(id,symbol);
+                symbol_table[depth].emplace(name,symbol);
             }
-            
         }
 };
 
@@ -329,12 +490,14 @@ class Stmt : public BaseAST
             }
             else if(stmt_type == Assign)
             {
+                var->load_array();
                 cout<<"  ";
-                Symbol* symbol = findSymbol(var->id_name);
+                Symbol* symbol = findSymbol(var->id);
                 symbol->value = expr->eval();
                 cout<<"store ";
                 expr->output();
-                cout<<", "<<symbol->name;
+                cout<<", ";
+                var->output();
             }
             else if(stmt_type == Break)
             {
@@ -493,7 +656,7 @@ class Expr : public BaseAST
                 stmt.print_koopa();
                 v->print_koopa();
 
-                var = findSymbol(name)->temp_var;
+                var = v->temp_var;
                 return;
             }
             if(operation == And)
@@ -511,7 +674,7 @@ class Expr : public BaseAST
                 stmt.print_koopa();
                 v->print_koopa();
 
-                var = findSymbol(name)->temp_var;
+                var = v->temp_var;
                 return;
             }
             var = genTempVar();
@@ -696,31 +859,53 @@ class Decls : public BaseAST
             for(int i=0;i < defs.size();i++)
             {
                 Symbol *symbol;
-                if(defs[i]->declType == ConstDecl)
+                if(defs[i]->declType == ConstDecl && defs[i]->offset.size() == 0)
                 {
-                    int value = (defs[i]->expr)->eval();
-                    symbol = new Symbol(ConstDecl,defs[i]->id,defs[i]->type,value);
+                    int value = (defs[i]->init)->eval();
+                    symbol = new Symbol(ConstDecl,defs[i]->name,defs[i]->type,value);
+                    symbol_table[0].emplace(defs[i]->name,symbol);
+                    continue;
                 }
-                else if(defs[i]->declType == VarDecl)
+                else if(defs[i]->declType == VarDecl && defs[i]->offset.size() == 0)
                 {
-                    string id = string("@global_") + defs[i]->id;
+                    string id = string("@global_") + defs[i]->name;
                     cout<<"global "<<id<<" = alloc i32, ";
-                    if(defs[i]->expr)
+                    if(defs[i]->init)
                     {
-                        int value = (defs[i]->expr)->eval();
+                        int value = (defs[i]->init)->eval();
                         symbol = new Symbol(VarDecl,id,defs[i]->type,value);
-                        cout<<value<<endl;
+                        cout<<value;
                     }
                     else
                     {
                         symbol = new Symbol(VarDecl,id,defs[i]->type);
-                        cout<<0<<endl;
+                        cout<<0;
                     }
                 }
-                symbol_table[0].emplace(defs[i]->id,symbol);
-            }
-            if(defs[0]->declType == VarDecl)
+                else if(defs[i]->offset.size() != 0)
+                {
+                    vector<int> temp;
+                    for(int j=0;j < defs[i]->offset.size();j++)
+                        temp.push_back((defs[i]->offset[j])->eval());
+                    string id = string("@global_") + defs[i]->name;
+                    cout<<"global "<<id<<" = alloc ";
+                    printType(defs[i]->type,temp);
+                    vector<int> vec;
+                    int num=1;
+                    for(int j=int(temp.size())-1;j >= 0;j--)
+                    {
+                        num = num * temp[j];
+                        vec.push_back(num);
+                    }
+                    cout<<", ";
+                    symbol = new Symbol(ArrayDecl,id,type);
+                    symbol->len = defs[i]->offset.size();
+                    printConstInit((InitVal*)defs[i]->init,vec);
+                }
+                symbol_table[0].emplace(defs[i]->name,symbol);
                 cout<<endl;
+            }
+            cout<<endl;
         }
 };
 
@@ -764,28 +949,38 @@ class FuncDef : public BaseAST
 
         virtual void print_koopa()
         {
-            func_table.emplace(id,func_type);
+            FuncInfo *func_info = new FuncInfo();
+            func_info->func_type = func_type;
+
             ifReturn = 0;
+            // 函数声明
             cout<<"fun @";
             cout<<id<<"(";
-            for(int i=0;i < int(params.size())-1;i++)
+            for(int i=0;i < int(params.size());i++)
             {
-                cout<<"@"<<params[i]->id<<": ";
-                if(params[i]->type == TypeInt)
-                    cout<<"i32, ";
-            }
-            if(params.size() != 0)
-            {
-                cout<<"@"<<(*params.rbegin())->id<<": ";
-                if((*params.rbegin())->type == TypeInt)
-                    cout<<"i32";
+                func_info->param_type.push_back(params[i]->type);
+
+                vector<int> vec;
+                cout<<"@"<<params[i]->name<<": ";
+                for(int j=0;j < params[i]->offset.size();j++)
+                    vec.push_back(params[i]->offset[j]->eval());
+                if(params[i]->type == TypePointer) cout<<"*";
+                printType(params[i]->type,vec);
+                if(i != int(params.size())-1)
+                    cout<<", ";
             }
             cout<<")";
+
+            func_table.emplace(id,func_info);
             if(func_type == TypeInt)
                 cout<<": i32";
+            // 函数体
             cout<<" {\n%"<<"entry:\n";
             for(int i=params.size()-1;i >= 0;i--)
-                ((Block*)block)->stmts.insert(((Block*)block)->stmts.begin(),(BaseAST*)params[i]);
+            {
+                ((Block*)block)->stmts.insert(((Block*)block)->stmts.begin(),params[i]);
+            }
+            // 处理没有返回语句的情况
             if(func_type==TypeInt)
             {
                 Number *num = new Number();
@@ -810,22 +1005,38 @@ class Program : public BaseAST
 
         virtual void print_koopa()
         {
+            FuncInfo *func_info;
             cout<<"decl @getint(): i32"<<endl;
-            func_table.emplace(string("getint"),TypeInt);
+            func_info = new FuncInfo(TypeInt);
+            func_table.emplace(string("getint"),func_info);
+
             cout<<"decl @getch(): i32"<<endl;
-            func_table.emplace(string("getch"),TypeInt);
+            func_info = new FuncInfo(TypeInt);
+            func_table.emplace(string("getch"),func_info);
+
             cout<<"decl @getarray(*i32): i32"<<endl;
-            func_table.emplace(string("getarray"),TypeInt);
+            func_info = new FuncInfo(TypeInt,vector<int>({TypePointer}));
+            func_table.emplace(string("getarray"),func_info);
+
             cout<<"decl @putint(i32)"<<endl;
-            func_table.emplace(string("putint"),TypeVoid);
+            func_info = new FuncInfo(TypeVoid,vector<int>({TypeInt}));
+            func_table.emplace(string("putint"),func_info);
+
             cout<<"decl @putch(i32)"<<endl;
-            func_table.emplace(string("putch"),TypeVoid);
+            func_info = new FuncInfo(TypeVoid,vector<int>({TypeInt}));
+            func_table.emplace(string("putch"),func_info);
+
             cout<<"decl @putarray(i32, *i32)"<<endl;
-            func_table.emplace(string("putarray"),TypeVoid);
+            func_info = new FuncInfo(TypeVoid,vector<int>({TypeInt,TypePointer}));
+            func_table.emplace(string("putarray"),func_info);
+
             cout<<"decl @starttime()"<<endl;
-            func_table.emplace(string("starttime"),TypeVoid);
+            func_info = new FuncInfo(TypeVoid);
+            func_table.emplace(string("starttime"),func_info);
+
             cout<<"decl @stoptime()"<<endl;
-            func_table.emplace(string("stoptime"),TypeVoid);
+            func_info = new FuncInfo(TypeVoid);
+            func_table.emplace(string("stoptime"),func_info);
             cout<<endl;
 
             for(int i=0;i < units.size();i++)
@@ -853,14 +1064,30 @@ class FuncCall : public BaseAST
             #ifdef DEBUG2
             cout<<"FuncCall "<<name<<endl;
             #endif
-            int type = func_table[name];
+            FuncInfo *func_info = func_table[name];
+            int return_type = func_info->func_type;
             temp_var = genTempVar();
+            // 先加载每个param
             for(int i=0;i < params.size();i++)
-                params[i]->print_koopa();
-            //cout<<type<<endl;
-            cout<<"  ";
-            if(type == TypeInt)
             {
+                switch (func_info->param_type[i])
+                {
+                    case TypeInt:
+                        params[i]->print_koopa();
+                        break;
+                    case TypePointer:
+                        Number *num = new Number();
+                        num->num = 0;
+                        ((Var*)params[i])->offset.push_back(num);
+                        params[i]->load_array();
+                        break;
+                }
+            }
+            
+            cout<<"  ";
+            if(return_type == TypeInt)
+            {   
+                // 如果函数有返回值，那么赋予一个临时变量
                 cout<<"%"<<temp_var<<" = ";
             }
             cout<<"call @"<<name<<"(";
@@ -912,4 +1139,147 @@ static int ifJumpInstr(BaseAST *s)
         return ret1 && ret2;
     }
     return 0;
+}
+
+static int findArraySize(vector<int> offset,int now_num)
+{
+    int num=1;
+    for(int i=0;i < offset.size();i++)
+    {
+        if(now_num % offset[i] == 0)
+            num = offset[i];
+        else
+            break;
+    }
+    return num;
+}
+
+static void printConstInit(InitVal *init,vector<int> offset)
+{
+    if(init == NULL)
+    {
+        cout<<"zeroinit";
+        return;
+    }
+    int need_num = *(offset.rbegin());
+    offset.pop_back();
+    if(offset.size() == 0)
+    {
+        int i=0;
+        cout<<"{";
+        for(;i < init->inits.size();i++)
+        {
+            cout<<init->inits[i]->eval();
+            if(i != need_num-1)
+                cout<<",";
+        }
+        for(;i < need_num;i++)
+        {
+            cout<<0;
+            if(i != need_num-1)
+                cout<<",";
+        }
+        cout<<"}";
+        return;
+    }
+    else
+    {
+        int child_num = *(offset.rbegin());
+        int now_num = 0;
+        InitVal *val = new InitVal();
+        cout<<"{";
+        for(int i=0;i < init->inits.size();i++)
+        {
+            if(init->inits[i] == NULL || init->inits[i]->ifInitVal())
+            {
+                int rule_num = findArraySize(offset,now_num);
+                now_num += rule_num;
+                if(rule_num == child_num)
+                {
+                    printConstInit((InitVal*)init->inits[i],offset);
+                    if(now_num != need_num)
+                        cout<<",";
+                    continue;
+                }
+                val->inits.push_back(init->inits[i]);
+                if(now_num % child_num == 0)
+                {
+                    printConstInit(val,offset);
+                    val->inits.clear();
+                    if(now_num != need_num)
+                        cout<<",";
+                }
+            }
+            else
+            {
+                val->inits.push_back(init->inits[i]);
+                now_num++;
+                if(now_num%child_num == 0)
+                {
+                    printConstInit(val,offset);
+                    val->inits.clear();
+                    if(now_num != need_num)
+                        cout<<",";
+                }
+           }
+        }
+        if(val->inits.size() != 0)
+        {
+            printConstInit(val,offset);
+            now_num = (now_num/child_num+1)*child_num;
+            if(now_num != need_num)
+                cout<<",";
+        }
+        delete val;
+        while(now_num < need_num)
+        {
+            cout<<"zeroinit";
+            now_num += child_num;
+            if(now_num != need_num)
+                cout<<",";
+        }
+        cout<<"}";
+    }
+}
+
+static void printVarInit(InitVal *init,vector<int> offset,string id,int now_num)
+{
+    for(int i=0;i < init->inits.size();i++)
+    {
+        if(init->inits[i] == NULL)
+        {
+            int rule_num = findArraySize(offset,now_num);
+            now_num += rule_num;
+        }
+        else if(init->inits[i]->ifInitVal())
+        {
+            int rule_num = findArraySize(offset,now_num);
+            printVarInit((InitVal*)init->inits[i],offset,id,now_num);
+            now_num += rule_num;
+        }
+        else
+        {
+            int ptr_id;
+            int temp_num = now_num;
+            int old_ptr_id;
+            ptr_id = genPtrId();
+            (init->inits[i])->print_koopa();
+            cout<<"  %ptr_"<<ptr_id<<" = getelemptr "<<id<<", "<<temp_num / (*(offset.rbegin()));
+            temp_num = temp_num % (*(offset.rbegin()));
+            cout<<endl;
+            for(int j=int(offset.size())-2;j >= 0;j--)
+            {
+                old_ptr_id = ptr_id;
+                ptr_id = genPtrId();
+                //cout<<"ptr_id:"<<genPtrId()<<endl;
+                cout<<"  %ptr_"<<ptr_id<<" = getelemptr %ptr_"<<old_ptr_id<<", "<<temp_num / offset[j];
+                temp_num = temp_num % offset[j];
+                cout<<endl;
+            }
+            cout<<"  store ";
+            (init->inits[i])->output();
+            cout<<", %ptr_"<<ptr_id<<endl;
+            now_num++;
+        }
+    }
 }
