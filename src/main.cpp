@@ -13,7 +13,7 @@ int main(int argc,char* argv[])
 {
     char *in_file = (char*)"../source.cpp";
     char *out_file = (char*)"../output.txt";
-    int omode = KOOPA_MODE;
+    int omode = RISCV_MODE;
     
     for(int i=1;i < argc;i++)
     {
@@ -50,9 +50,10 @@ int main(int argc,char* argv[])
     }
     if(omode == RISCV_MODE)
     {
-        freopen("koopa.txt","w",stdout);
+        freopen("../koopa.txt","w",stdout);
         answer->print_koopa();
-        FILE* ff=fopen("whatever.txt","r");
+        cout<<endl;
+        FILE* ff=fopen("../koopa.txt","r");
         char *buf=(char *)malloc(1000000);
         fread(buf, 1,1000000, ff);
         freopen(out_file,"w",stdout);
