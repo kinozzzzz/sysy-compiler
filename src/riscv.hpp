@@ -6,6 +6,9 @@
 
 using namespace std;
 
+static map<koopa_raw_value_t,int> VarOffset;   //栈中变量的偏移量
+static int now_offset;
+
 static map<int,const char*> RegName;
 static map<koopa_raw_value_t,int> Instr;   //每条指令所在寄存器(可能某个时刻不存在)
 static map<int,koopa_raw_value_t> Reg;   //寄存器中的此时所存得指令的计算值
@@ -137,16 +140,43 @@ static void print_func(koopa_raw_function_t func)
 {
     if(func->bbs.len == 0) return;   // 函数声明，跳过
     cout<<func->name+1<<":"<<endl;
-    for (size_t i = 0; i < func->bbs.len; i++) 
+
+    VarOffset.clear();
+    now_offset = 0;
+
+    int stack_frame = 0;   // 为临时变量开辟空间
+    for(size_t i = 0;i < func->bbs.len;i++)
     {
         koopa_raw_basic_block_t block = (koopa_raw_basic_block_t)func->bbs.buffer[i];
-        for (size_t k = 0; k < block->insts.len; k++)
+        for(size_t k = 0;k < block->insts.len;k++)
+        {
+            koopa_raw_value_t value = (koopa_raw_value_t)block->insts.buffer[k];
+            if(value->kind.tag == KOOPA_RVT_ALLOC)
+            {
+                VarOffset[value] = stack_frame;
+                stack_frame += 4;
+            }
+        }
+    }
+    now_offset = stack_frame;
+    stack_frame = ((stack_frame+15) / 16 + 1) * 16;     // 1是为了可能存储的临时变量
+    cout<<"  addi sp, sp, -"<<stack_frame<<endl;
+
+
+    for(size_t i = 0;i < func->bbs.len;i++) 
+    {
+        koopa_raw_basic_block_t block = (koopa_raw_basic_block_t)func->bbs.buffer[i];
+        for(size_t k = 0;k < block->insts.len;k++)
         {
             koopa_raw_value_t value = (koopa_raw_value_t)block->insts.buffer[k];
             /*
                 value->kind.tag: IR对应的指令类型
                 value->kind.data.binary.op: IR的具体操作类型，加减乘除等
             */
+            int reg;
+            koopa_raw_value_t store_src;
+            koopa_raw_value_t store_value;
+            koopa_raw_value_t store_dest;
             switch ((value->kind).tag)
             {
                 case KOOPA_RVT_INTEGER:
@@ -174,9 +204,20 @@ static void print_func(koopa_raw_function_t func)
                     break;
 
                 case KOOPA_RVT_LOAD:
+                    store_src = value->kind.data.load.src;
+
+                    reg = findAvailableReg();
+                    cout<<"  lw "<<RegName[reg]<<", "<<VarOffset[store_src]<<"(sp)"<<endl;
+                    Instr.emplace(value,reg);
+                    Reg[reg] = value;
                     break;
 
                 case KOOPA_RVT_STORE:
+                    store_value = value->kind.data.store.value;
+                    store_dest = value->kind.data.store.dest;
+
+                    reg = findInstrReg(store_value);
+                    cout<<"  sw "<<RegName[reg]<<", "<<VarOffset[store_dest]<<"(sp)"<<endl;
                     break;
                     
                 case KOOPA_RVT_GET_PTR:
@@ -199,14 +240,16 @@ static void print_func(koopa_raw_function_t func)
                     break;
 
                 case KOOPA_RVT_RETURN:
-                    int reg = findInstrReg(value->kind.data.ret.value);
+                    reg = findInstrReg(value->kind.data.ret.value);
                     if(reg != 7)
                     {
                         cout<<"  mv a0, "<<RegName[reg]<<endl;
                     }
+                    cout<<"  addi sp, sp, "<<stack_frame<<endl;
                     cout<<"  ret"<<endl;
                     break;
             }
+            GenerInstr.emplace(value);
         }
     }
 };
