@@ -8,6 +8,7 @@ using namespace std;
 
 static map<koopa_raw_value_t,int> VarOffset;   //栈中变量的偏移量
 static int now_offset;
+static int middle_block = 0;
 
 static map<int,const char*> RegName;
 static map<koopa_raw_value_t,int> Instr;   //每条指令所在寄存器(可能某个时刻不存在)
@@ -158,14 +159,15 @@ static void print_func(koopa_raw_function_t func)
             }
         }
     }
+
     now_offset = stack_frame;
     stack_frame = ((stack_frame+15) / 16 + 1) * 16;     // 1是为了可能存储的临时变量
     cout<<"  addi sp, sp, -"<<stack_frame<<endl;
 
-
     for(size_t i = 0;i < func->bbs.len;i++) 
     {
         koopa_raw_basic_block_t block = (koopa_raw_basic_block_t)func->bbs.buffer[i];
+        if(block->name && i != 0) cout<<block->name+1<<":"<<endl;
         for(size_t k = 0;k < block->insts.len;k++)
         {
             koopa_raw_value_t value = (koopa_raw_value_t)block->insts.buffer[k];
@@ -173,82 +175,65 @@ static void print_func(koopa_raw_function_t func)
                 value->kind.tag: IR对应的指令类型
                 value->kind.data.binary.op: IR的具体操作类型，加减乘除等
             */
-            int reg;
-            koopa_raw_value_t store_src;
-            koopa_raw_value_t store_value;
-            koopa_raw_value_t store_dest;
-            switch ((value->kind).tag)
+            koopa_raw_value_tag_t tag = (value->kind).tag;
+            if(tag == KOOPA_RVT_LOAD)
             {
-                case KOOPA_RVT_INTEGER:
-                    break;
-
-                case KOOPA_RVT_ZERO_INIT:
-                    break;
-
-                case KOOPA_RVT_UNDEF:
-                    break;
-
-                case KOOPA_RVT_AGGREGATE:
-                    break;
-
-                case KOOPA_RVT_FUNC_ARG_REF:
-                    break;
-
-                case KOOPA_RVT_BLOCK_ARG_REF:
-                    break;
-
-                case KOOPA_RVT_ALLOC:
-                    break;
-
-                case KOOPA_RVT_GLOBAL_ALLOC:
-                    break;
-
-                case KOOPA_RVT_LOAD:
-                    store_src = value->kind.data.load.src;
-
-                    reg = findAvailableReg();
-                    cout<<"  lw "<<RegName[reg]<<", "<<VarOffset[store_src]<<"(sp)"<<endl;
-                    Instr.emplace(value,reg);
-                    Reg[reg] = value;
-                    break;
-
-                case KOOPA_RVT_STORE:
-                    store_value = value->kind.data.store.value;
-                    store_dest = value->kind.data.store.dest;
-
-                    reg = findInstrReg(store_value);
-                    cout<<"  sw "<<RegName[reg]<<", "<<VarOffset[store_dest]<<"(sp)"<<endl;
-                    break;
-                    
-                case KOOPA_RVT_GET_PTR:
-                    break;
-
-                case KOOPA_RVT_GET_ELEM_PTR:
-                    break;
-
-                case KOOPA_RVT_BINARY:
-                    print_binary(value);
-                    break;
-
-                case KOOPA_RVT_BRANCH:
-                    break;
-
-                case KOOPA_RVT_JUMP:
-                    break;
-
-                case KOOPA_RVT_CALL:
-                    break;
-
-                case KOOPA_RVT_RETURN:
-                    reg = findInstrReg(value->kind.data.ret.value);
-                    if(reg != 7)
-                    {
-                        cout<<"  mv a0, "<<RegName[reg]<<endl;
-                    }
-                    cout<<"  addi sp, sp, "<<stack_frame<<endl;
-                    cout<<"  ret"<<endl;
-                    break;
+                koopa_raw_value_t store_src = value->kind.data.load.src;
+                int reg = findAvailableReg();
+                
+                cout<<"  lw "<<RegName[reg]<<", "<<VarOffset[store_src]<<"(sp)"<<endl;
+                Instr.emplace(value,reg);
+                Reg[reg] = value;
             }
+            else if(tag == KOOPA_RVT_STORE)
+            {
+                koopa_raw_value_t store_value = value->kind.data.store.value;
+                koopa_raw_value_t store_dest = value->kind.data.store.dest;
+                int reg = findInstrReg(store_value);
+                
+                cout<<"  sw "<<RegName[reg]<<", "<<VarOffset[store_dest]<<"(sp)"<<endl;
+            }
+            else if(tag == KOOPA_RVT_BINARY)
+            {
+                print_binary(value);
+            }
+            else if(tag == KOOPA_RVT_BRANCH)
+            {
+                koopa_raw_value_t cond = value->kind.data.branch.cond;
+                koopa_raw_basic_block_t true_block = value->kind.data.branch.true_bb;
+                koopa_raw_basic_block_t false_block = value->kind.data.branch.false_bb;
+                int reg = findInstrReg(cond);
+                if(true_block->insts.len <= 500)
+                {
+                    cout<<"  bnez "<<RegName[reg]<<", "<<true_block->name+1<<endl;
+                    cout<<"  j "<<false_block->name+1<<endl;
+                }
+                else
+                {
+                    string middle = string("middle") + to_string(middle_block);
+                    cout<<"  bnez "<<RegName[reg]<<", "<<middle<<endl;
+                    cout<<"  j "<<false_block->name+1<<endl;
+                    cout<<middle<<":"<<endl;
+                    cout<<"  j "<<true_block->name+1<<endl;
+                }
+                
+            }
+            else if(tag == KOOPA_RVT_JUMP)
+            {
+                koopa_raw_basic_block_t target_block = value->kind.data.jump.target;
+                cout<<"  j "<<target_block->name+1<<endl;
+            }
+            else if(tag == KOOPA_RVT_RETURN)
+            {
+                int reg = findInstrReg(value->kind.data.ret.value);
+                if(reg != 7)
+                {
+                    cout<<"  mv a0, "<<RegName[reg]<<endl;
+                }
+                cout<<"  addi sp, sp, "<<stack_frame<<endl;
+                cout<<"  ret"<<endl;
+            }
+
             GenerInstr.emplace(value);
         }
     }
