@@ -546,21 +546,10 @@ class JumpStmt : public BaseAST
             
             if(!then_block && !else_block)  //两个基本块都不需要生成
                 return;
-            int temp_var = genTempVar();
             //cout<<"?"<<else_block<<" "<<then_block<<endl;
-            if(else_block && !then_block)
-            {
-                cout<<"  %"<<temp_var<<" = eq ";
-                expr->output();
-                cout<<", 0"<<endl;
-                cout<<"  br ";
-                cout<<"%"<<temp_var;
-            }
-            else
-            {
-                cout<<"  br ";
-                expr->output();
-            }
+
+            cout<<"  br ";
+            expr->output();
             int ret1=0,ret2=0;
             if(then_block && else_block)
             {
@@ -588,7 +577,7 @@ class JumpStmt : public BaseAST
             }
             else if(else_block)
             {
-                cout<<", %else_"<<id<<", %end_"<<id<<endl;
+                cout<<", %end_"<<id<<", %else_"<<id<<endl;
                 genBlock("else",id);
                 else_stmt->print_koopa();
                 ret2=ifJumpInstr(else_stmt);
