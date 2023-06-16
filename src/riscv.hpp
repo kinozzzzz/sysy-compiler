@@ -110,6 +110,7 @@ static int findInstrReg(koopa_raw_value_t value)
     else
         reg=Instr[value];
     
+    Reg[reg] = value;
     return reg;
 }
 
