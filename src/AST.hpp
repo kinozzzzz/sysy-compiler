@@ -543,10 +543,11 @@ class JumpStmt : public BaseAST
                 else_block = !else_stmt->ifEmptyBlock();
             else
                 else_block = 0;
+            
             if(!then_block && !else_block)  //两个基本块都不需要生成
                 return;
-
             int temp_var = genTempVar();
+            //cout<<"?"<<else_block<<" "<<then_block<<endl;
             if(else_block && !then_block)
             {
                 cout<<"  %"<<temp_var<<" = eq ";
