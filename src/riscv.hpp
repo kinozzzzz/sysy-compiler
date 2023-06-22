@@ -11,17 +11,23 @@ using namespace std;
 #define REG_t0 0
 #define REG_a0 7
 #define REG_ra 15
+#define REG_sp 16
 
 static int middle_block = 0;
+static int temp_offset = 0;
+static int replace_reg = REG_t0;
 
 static map<int,const char*> RegName;            //每个寄存器的名字
 static map<koopa_raw_value_t,int> VarOffset;    //栈中变量的偏移量
 static map<koopa_raw_value_t,int> Instr;        //每条指令所在寄存器(可能某个时刻不存在)
-static map<int,koopa_raw_value_t> Reg;          //寄存器中的此时所存得指令的计算值
+static map<int,koopa_raw_value_t> Reg;          //指示寄存器被哪个指令占用
 static map<koopa_raw_value_t,koopa_raw_basic_block_t> GenerInstr;       //已经生成汇编代码的指令
 static set<koopa_raw_basic_block_t> GenerBlock; //已经生成的block
+static map<koopa_raw_value_t,vector<int>> ArraySize;
 
 static int findInstrReg(koopa_raw_value_t value);
+static inline void genInstr(const char* op,int reg1,int reg2,int reg3);
+static int findAvailableReg(koopa_raw_value_t need_reg);
 
 static void genMove(int src_reg,int dest_reg)
 {
@@ -33,12 +39,28 @@ static void genMove(int src_reg,int dest_reg)
 
 static inline void genStore2Stack(int reg,int offset)
 {
-    cout<<"  sw "<<RegName[reg]<<", "<<offset<<"(sp)"<<endl;
+    if(offset > 2047)
+    {
+        int treg = findAvailableReg(NULL);
+        cout<<"  li "<<RegName[treg]<<", "<<offset<<endl;
+        genInstr("add",treg,REG_sp,treg);
+        cout<<"  sw "<<RegName[reg]<<", 0("<<RegName[treg]<<")"<<endl;
+    }
+    else
+        cout<<"  sw "<<RegName[reg]<<", "<<offset<<"(sp)"<<endl;
 }
 
 static inline void genLoad4Stack(int reg,int offset)
 {
-    cout<<"  lw "<<RegName[reg]<<", "<<offset<<"(sp)"<<endl;
+    if(offset > 2047)
+    {
+        int treg = findAvailableReg(NULL);
+        cout<<"  li "<<RegName[treg]<<", "<<offset<<endl;
+        genInstr("add",treg,REG_sp,treg);
+        cout<<"  lw "<<RegName[reg]<<", 0("<<RegName[treg]<<")"<<endl;
+    }
+    else
+        cout<<"  lw "<<RegName[reg]<<", "<<offset<<"(sp)"<<endl;
 }
 
 /*
@@ -89,7 +111,16 @@ static int findAvailableReg(koopa_raw_value_t need_reg)
         if(RegIfAvailable(reg,need_reg))
             return reg;
     }
-    exit(-100);
+    replace_reg++;
+    if(replace_reg == REG_ra)
+        replace_reg = REG_t0;
+    koopa_raw_value_t value = Reg[replace_reg];
+    VarOffset[value] = temp_offset;
+    Instr[value] = -1;
+    genStore2Stack(replace_reg,temp_offset);
+    temp_offset += 4;
+    Reg[replace_reg] = NULL;
+    return replace_reg;
 }
 
 static int findInstrReg(koopa_raw_value_t value)
@@ -99,7 +130,7 @@ static int findInstrReg(koopa_raw_value_t value)
     {
         if(value->kind.data.integer.value==0)
         {
-            reg=-1;
+            reg = -1;
         }
         else
         {
@@ -107,9 +138,21 @@ static int findInstrReg(koopa_raw_value_t value)
             cout<<"  li "<<RegName[reg]<<", "<<value->kind.data.integer.value<<endl;
         }
     }
+    else if(value->kind.tag == KOOPA_RVT_ZERO_INIT)
+    {
+        return -1;
+    }
     else
+    {
         reg=Instr[value];
-    
+        if(reg == -1)
+        {
+            // -1说明寄存器中的值被存到了内存中
+            reg = findAvailableReg(value);
+            genLoad4Stack(reg,VarOffset[value]);
+        }
+        Instr[value] = reg;
+    }
     Reg[reg] = value;
     return reg;
 }
@@ -117,6 +160,25 @@ static int findInstrReg(koopa_raw_value_t value)
 static inline void genInstr(const char* op,int reg1,int reg2,int reg3)
 {
     cout<<"  "<<op<<" "<<RegName[reg1]<<", "<<RegName[reg2]<<", "<<RegName[reg3]<<endl;
+}
+
+static void genInit(koopa_raw_value_t init,vector<int> lens)
+{
+    if(init->kind.tag == KOOPA_RVT_INTEGER)
+    {
+        cout<<"  .word "<<init->kind.data.integer.value<<endl;
+        return;
+    }
+    int len = *lens.rbegin();
+    lens.pop_back();
+    if(init->kind.tag == KOOPA_RVT_ZERO_INIT)
+    {
+        cout<<"  .zero "<<(len<<2)<<endl;
+    }
+    for(int i=0;i < init->kind.data.aggregate.elems.len;i++)
+    {
+        genInit((koopa_raw_value_t)init->kind.data.aggregate.elems.buffer[i],lens);
+    }
 }
 
 static void print_binary(koopa_raw_value_t value)
@@ -209,7 +271,10 @@ static void print_call(koopa_raw_value_t value,int offset)
         else
         {
             int param_reg = findInstrReg(param);
-            genLoad4Stack(REG_t0,(offset + param_reg)*4);
+            if(param_reg != -1)
+                genLoad4Stack(REG_t0,(offset + param_reg)*4);
+            else
+                genLoad4Stack(REG_t0,VarOffset[param]);
             genStore2Stack(REG_t0,(i-8)*4);
         }
     }
@@ -224,7 +289,11 @@ static void print_call(koopa_raw_value_t value,int offset)
         }
         else
         {
-            genLoad4Stack(i+REG_a0,(offset + Instr[param])*4);
+            int reg = findInstrReg(param);
+            if(reg != -1)
+                genLoad4Stack(i+REG_a0,(offset + reg)*4);
+            else
+                genLoad4Stack(i+REG_a0,VarOffset[param]);
         }
     }
     koopa_raw_function_t callee = value->kind.data.call.callee;
@@ -308,15 +377,51 @@ static void print_func(koopa_raw_function_t func)
             if(value->kind.tag == KOOPA_RVT_ALLOC)
             {
                 VarOffset[value] = stack_frame;
-                stack_frame += 4;
+                const koopa_raw_type_kind *base = value->ty->data.pointer.base;
+                if(base->tag == KOOPA_RTT_POINTER)
+                {
+                    // 处理数组参数
+                    base = base->data.pointer.base;
+                }
+                int len = 1;
+                vector<int> temp;
+                while(base->tag == KOOPA_RTT_ARRAY)
+                {
+                    temp.push_back(base->data.array.len);
+                    len *= base->data.array.len;
+                    base = base->data.array.base;
+                }
+                vector<int> lens;
+                int tlen = 1;
+                for(auto i = temp.rbegin();i != temp.rend();i++)
+                {
+                    lens.push_back(tlen);
+                    tlen *= *i;
+                }
+                if(value->ty->data.pointer.base->tag == KOOPA_RTT_POINTER)
+                {
+                    lens.push_back(tlen);
+                }
+                //cout<<lens.size()<<endl;
+                if(len > 1) ArraySize[value] = lens;
+                stack_frame += len<<2;
             }
         }
     }
+    temp_offset = stack_frame;
 
-    stack_frame = ((stack_frame+15) / 16 + 1) * 16;     // 1是为了可能存储的临时变量
-    cout<<"  addi sp, sp, -"<<stack_frame<<endl;
+    stack_frame = ((stack_frame+31) / 16) << 4;     // 1是为了可能存储的临时变量
+    if(stack_frame > 2047)
+    {
+        int reg = findAvailableReg(NULL);
+        cout<<"  li "<<RegName[reg]<<", -"<<stack_frame<<endl;
+        genInstr("add",REG_sp,REG_sp,reg);
+    }
+    else
+        cout<<"  addi sp, sp, -"<<stack_frame<<endl;
     genStore2Stack(REG_ra,extra_params*4);
 
+    // 翻译指令部分
     for(size_t i = 0;i < func->bbs.len;i++)
     {
         koopa_raw_basic_block_t block = (koopa_raw_basic_block_t)func->bbs.buffer[i];
@@ -334,6 +439,8 @@ static void print_func(koopa_raw_function_t func)
             {
                 koopa_raw_value_t load_src = value->kind.data.load.src;
                 int reg = findAvailableReg(value);
+                ArraySize[value] = ArraySize[load_src];
+
                 if(load_src->kind.tag == KOOPA_RVT_ALLOC)
                 {
                     genLoad4Stack(reg,VarOffset[load_src]);
@@ -343,7 +450,12 @@ static void print_func(koopa_raw_function_t func)
                     cout<<"  la "<<RegName[reg]<<", "<<load_src->name+1<<endl;
                     cout<<"  lw "<<RegName[reg]<<", 0("<<RegName[reg]<<")"<<endl;
                 }
-                Instr.emplace(value,reg);
+                else
+                {
+                    int dest_reg = findInstrReg(load_src);
+                    cout<<"  lw "<<RegName[reg]<<", 0("<<RegName[dest_reg]<<")"<<endl;
+                }
+                Instr[value] = reg;
                 Reg[reg] = value;
             }
             else if(tag == KOOPA_RVT_STORE)
@@ -351,7 +463,8 @@ static void print_func(koopa_raw_function_t func)
                 koopa_raw_value_t store_value = value->kind.data.store.value;
                 koopa_raw_value_t store_dest = value->kind.data.store.dest;
                 int reg = findInstrReg(store_value);
-                
+
+
                 if(store_value->kind.tag == KOOPA_RVT_FUNC_ARG_REF)
                 {
                     // 如果是函数参数则存储寄存器或从栈上转移值
@@ -377,6 +490,11 @@ static void print_func(koopa_raw_function_t func)
                     cout<<"  la "<<RegName[temp_reg]<<", "<<store_dest->name+1<<endl;
                     cout<<"  sw "<<RegName[reg]<<", 0("<<RegName[temp_reg]<<")"<<endl;
                 }
+                else
+                {
+                    int dest_reg = findInstrReg(store_dest);
+                    cout<<"  sw "<<RegName[reg]<<", 0("<<RegName[dest_reg]<<")"<<endl;
+                }
             }
             else if(tag == KOOPA_RVT_BINARY)
             {
@@ -397,7 +515,7 @@ static void print_func(koopa_raw_function_t func)
                 }
                 else
                 {
-                    string middle = string("middle") + to_string(middle_block);
+                    string middle = string("middle") + to_string(middle_block++);
                     cout<<"  bnez "<<RegName[reg]<<", "<<middle<<endl;
                     cout<<"  j "<<false_block->name+1<<endl;
                     cout<<middle<<":"<<endl;
@@ -417,14 +535,83 @@ static void print_func(koopa_raw_function_t func)
                 {
                     int reg = findInstrReg(ret_value);
                     genMove(reg,REG_a0);
+                    Reg[reg] = NULL;
                 }
                 genLoad4Stack(REG_ra,extra_params*4);
-                cout<<"  addi sp, sp, "<<stack_frame<<endl;
+                if(stack_frame > 2047)
+                {
+                    int reg = findAvailableReg(NULL);
+                    cout<<"  li "<<RegName[reg]<<", "<<stack_frame<<endl;
+                    genInstr("add",REG_sp,REG_sp,reg);
+                }
+                else
+                    cout<<"  addi sp, sp, "<<stack_frame<<endl;
                 cout<<"  ret"<<endl;
             }
             else if(tag == KOOPA_RVT_CALL)
             {
                 print_call(value,extra_params+1);
+            }
+            else if(tag == KOOPA_RVT_GET_ELEM_PTR)
+            {
+                koopa_raw_value_t src = (koopa_raw_value_t)value->kind.data.get_elem_ptr.src;
+                koopa_raw_value_t index = (koopa_raw_value_t) value->kind.data.get_elem_ptr.index;
+                int reg = findAvailableReg(NULL);
+                Reg[reg] = value;
+                int treg = findAvailableReg(NULL);
+                Reg[treg] = value;
+                if(src->kind.tag == KOOPA_RVT_ALLOC)
+                {
+                    int offset = VarOffset[src];
+                    cout<<"  li "<<RegName[treg]<<", "<<offset<<endl;
+                    genInstr("add",reg,REG_sp,treg);
+                }
+                else if(src->kind.tag == KOOPA_RVT_GLOBAL_ALLOC)
+                {
+                    cout<<"  la "<<RegName[reg]<<", "<<src->name+1<<endl;
+                }
+                else
+                {
+                    Reg[reg] = NULL;
+                    reg = findInstrReg(src);
+                    Reg[reg] = value;
+                }
+                int index_reg = findInstrReg(index);
+                vector<int> lens = ArraySize[src];
+                int len = *lens.rbegin();
+                lens.pop_back();
+                ArraySize[value] = lens;
+                cout<<"  li "<<RegName[treg]<<", "<<len*4<<endl;
+                genInstr("mul",treg,treg,index_reg);
+                genInstr("add",reg,reg,treg);
+                Instr[value] = reg;
+                Reg[treg] = NULL;
+            }
+            else if(tag == KOOPA_RVT_GET_PTR)
+            {
+                koopa_raw_value_t src = (koopa_raw_value_t)value->kind.data.get_ptr.src;
+                koopa_raw_value_t index = (koopa_raw_value_t) value->kind.data.get_ptr.index;
+                int reg = findInstrReg(src);
+                Reg[reg] = value;
+                int treg = findAvailableReg(NULL);
+                Reg[treg] = value;
+                int index_reg = findInstrReg(index);
+                
+                vector<int> lens = ArraySize[src];
+                int len;
+                if(lens.size() == 0)
+                    len = 1;
+                else
+                {
+                    len = *(lens.rbegin());
+                    lens.pop_back();
+                }
+                ArraySize[value] = lens;
+                cout<<"  li "<<RegName[treg]<<", "<<(len<<2)<<endl;
+                genInstr("mul",treg,treg,index_reg);
+                genInstr("add",reg,reg,treg);
+                Instr[value] = reg;
+                Reg[treg] = NULL;
             }
             GenerInstr.emplace(value,block);
         }
@@ -451,6 +638,7 @@ static void system_init()
     RegName.emplace(13,"a6");
     RegName.emplace(14,"a7");
     RegName.emplace(15,"ra");
+    RegName.emplace(16,"sp");
 
     for(int i=0;i < 15;i++)
         Reg.emplace(i,(koopa_raw_value_t)NULL);
@@ -465,8 +653,6 @@ static void print_riscv(const char *buf)
     koopa_raw_program_t raw = koopa_build_raw_program(builder, program);
     koopa_delete_program(program);
 
-    
-
     system_init();
     cout<<"  .data"<<endl;
     for(int i = 0;i < raw.values.len;i++)
@@ -475,7 +661,33 @@ static void print_riscv(const char *buf)
         cout<<"  .global "<<value->name+1<<endl;
         koopa_raw_value_t init = value->kind.data.global_alloc.init;
         cout<<value->name+1<<":"<<endl;
-        cout<<"  .word "<<init->kind.data.integer.value<<endl;
+        if(init->ty->tag == KOOPA_RTT_INT32)
+        {
+            cout<<"  .word "<<init->kind.data.integer.value<<endl;
+        }
+        else if(init->ty->tag == KOOPA_RTT_ARRAY)
+        {
+            const koopa_raw_type_kind *base = init->ty;
+            int len = 1;
+            vector<int> temp;
+            while(base->tag == KOOPA_RTT_ARRAY)
+            {
+                temp.push_back(base->data.array.len);
+                len *= base->data.array.len;
+                base = base->data.array.base;
+            }
+            vector<int> lens;
+            int tlen = 1;
+            for(auto i = temp.rbegin();i != temp.rend();i++)
+            {
+                tlen *= *i;
+                lens.push_back(tlen);
+            }
+            genInit(init,lens);
+            lens.pop_back();
+            lens.insert(lens.begin(),1);
+            if(len > 1) ArraySize[value] = lens;
+        }
     }
     cout<<endl;
     cout<<"  .text"<<endl;

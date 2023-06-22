@@ -47,6 +47,7 @@ int main(int argc,char* argv[])
         freopen(out_file,"w",stdout);
         #endif
         answer->print_koopa();
+        // level8 summary应该是print_koopa出错了，语法分析成功
     }
     if(omode == RISCV_MODE)
     {
