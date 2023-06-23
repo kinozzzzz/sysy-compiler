@@ -389,7 +389,7 @@ Var
         #endif
         $1->offset.push_back($3);
         $$ = $1;
-    }   
+    }
 
 Stmt
     :   MS
@@ -417,13 +417,12 @@ MS
         Stmt* ast = new Stmt(NULL,Return);
         $$ = (BaseAST*)ast;
     }
-    |   Var '=' Expr ';'
+    |   Var '=' Expr ';'   //前面的Expr只能是
     {
         #ifdef DEBUG1
         cout<<"T_Ident = Expr; -> Stmt"<<endl;
         #endif
-        Stmt *ast = new Stmt($3,Assign,new Var(*($1)));
-        delete $1;
+        Stmt *ast = new Stmt($3,Assign,(Var*)$1);
         $$ = (BaseAST*)ast;
     }
     |   Block

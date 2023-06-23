@@ -809,9 +809,15 @@ class Expr : public BaseAST
                 else if(operation == Mul)
                     return temp1 * temp2;
                 else if(operation == Div)
+                {
+                    if(temp2 == 0)  return 0;
                     return temp1 / temp2;
+                }
                 else if(operation == Mod)
+                {
+                    if(temp2 == 0)  return 0;
                     return temp1 % temp2;
+                }
                 else if(operation == Less)
                     return temp1 < temp2;
                 else if(operation == Greater)

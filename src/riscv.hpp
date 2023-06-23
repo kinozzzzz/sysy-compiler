@@ -410,7 +410,7 @@ static void print_func(koopa_raw_function_t func)
     }
     temp_offset = stack_frame;
 
-    stack_frame = ((stack_frame+31) / 16) << 4;     // 1是为了可能存储的临时变量
+    stack_frame = ((stack_frame+255) / 16) << 4;     // 1是为了可能存储的临时变量
     if(stack_frame > 2047)
     {
         int reg = findAvailableReg(NULL);
